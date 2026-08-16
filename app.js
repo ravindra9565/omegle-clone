@@ -10,13 +10,17 @@ const STUN_SERVERS = [
 const AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true
+  autoGainControl: true,
+  channelCount: 1,
+  sampleRate: 48000,
+  sampleSize: 16,
+  latency: 0.005
 };
 
 const VIDEO_CONSTRAINTS = {
   width: { ideal: 640, max: 1280 },
   height: { ideal: 480, max: 720 },
-  frameRate: { ideal: 24, max: 30 },
+  frameRate: { ideal: 30, min: 24, max: 30 },
   facingMode: 'user'
 };
 
@@ -240,41 +244,6 @@ function updateMicIndicator(active) {
   }
 }
 
-async function requestAudioPermission() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    return null;
-  }
-
-  try {
-    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
-    const micTrack = audioStream.getAudioTracks()[0];
-    if (!micTrack) {
-      return null;
-    }
-
-    micTrack.enabled = true;
-    applyAudioTrackSettings(micTrack);
-
-    if (localStream) {
-      localStream.addTrack(micTrack);
-    } else {
-      localStream = audioStream;
-    }
-
-    localVideo.srcObject = localStream;
-    localVideo.muted = true;
-    localVideo.play().catch(() => {});
-
-    console.log('🎤 Real microphone track acquired and attached!');
-    updateMicIndicator(true);
-    return localStream;
-  } catch (err) {
-    console.warn('Microphone acquisition error:', err);
-    updateMicIndicator(false);
-    return null;
-  }
-}
-
 // Ensure Microphone Track is Always Attached
 async function ensureMicrophoneTrack() {
   if (!localStream) {
@@ -283,11 +252,30 @@ async function ensureMicrophoneTrack() {
 
   const audioTracks = localStream ? localStream.getAudioTracks() : [];
   if (audioTracks.length === 0) {
-    return requestAudioPermission();
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+        const micTrack = audioStream.getAudioTracks()[0];
+        if (micTrack) {
+          micTrack.enabled = true;
+          applyAudioTrackSettings(micTrack);
+          if (localStream) {
+            localStream.addTrack(micTrack);
+          } else {
+            localStream = audioStream;
+          }
+          console.log('🎤 Real microphone track acquired and attached!');
+          updateMicIndicator(true);
+        }
+      }    } catch (err) {
+      console.warn('Microphone acquisition error:', err);
+      updateMicIndicator(false);
+    }
+  } else {
+    audioTracks.forEach(t => t.enabled = true);
+    updateMicIndicator(true);
   }
 
-  audioTracks.forEach(t => t.enabled = true);
-  updateMicIndicator(true);
   return localStream;
 }
 
@@ -537,13 +525,16 @@ async function handleSignalEvent(payload) {
           } catch (e) {}
         }
 
-        const answer = await peerConnection.createAnswer({
+        const rawAnswer = await peerConnection.createAnswer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true
         });
+        const optimizedSdp = optimizeSdp(rawAnswer.sdp);
+        const answer = { type: rawAnswer.type, sdp: optimizedSdp };
         await peerConnection.setLocalDescription(answer);
-        sendSignal('answer', { session_id: sessionId, sdp: { type: answer.type, sdp: answer.sdp } });
-        console.log('Sent WebRTC Answer with Audio & Video');
+        applySenderOptimizations(peerConnection);
+        sendSignal('answer', { session_id: sessionId, sdp: answer });
+        console.log('Sent WebRTC Answer with Audio & Video (Low-latency optimized)');
       } catch (e) {
         console.error('Error handling offer:', e);
       }
@@ -595,7 +586,50 @@ async function handleSignalEvent(payload) {
   }
 }
 
-// 4. Live Frame Streaming Relay Fallback
+// 4. Ultra Low Latency & High-Speed Media Optimization
+function optimizeSdp(sdpStr) {
+  if (!sdpStr) return sdpStr;
+  let modified = sdpStr;
+  // Tune Opus audio for instantaneous low-latency speech
+  if (modified.includes('opus/48000')) {
+    if (!modified.includes('minptime=10')) {
+      modified = modified.replace(
+        /a=rtpmap:(\d+) opus\/48000\/2/g,
+        'a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;usedtx=1;cbr=0;maxaveragebitrate=64000'
+      );
+    }
+  }
+  return modified;
+}
+
+function applySenderOptimizations(pc) {
+  if (!pc || !pc.getSenders) return;
+  pc.getSenders().forEach(sender => {
+    if (!sender.track) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      if (sender.track.kind === 'video') {
+        params.encodings[0].maxBitrate = 1500000;
+        params.encodings[0].networkPriority = 'high';
+        params.encodings[0].priority = 'high';
+        params.encodings[0].maxFramerate = 30;
+      } else if (sender.track.kind === 'audio') {
+        params.encodings[0].maxBitrate = 64000;
+        params.encodings[0].networkPriority = 'high';
+        params.encodings[0].priority = 'high';
+      }
+      if ('degradationPreference' in params) {
+        params.degradationPreference = 'maintain-framerate';
+      }
+      sender.setParameters(params).catch(() => {});
+    } catch (e) {}
+  });
+}
+
+// 5. Live Frame Streaming Relay Fallback
 function startFrameStreaming() {
   stopFrameStreaming();
   frameStreamTimer = setInterval(() => {
@@ -634,7 +668,7 @@ function renderRemoteFrame(dataUrl) {
   img.src = dataUrl;
 }
 
-// 5. Setup WebRTC Peer Connection (Pure Native W3C WebRTC Implementation)
+// 6. Setup WebRTC Peer Connection (Ultra-Low Latency Implementation)
 async function setupPeerConnection(isInitiator) {
   pendingCandidates = [];
 
@@ -648,37 +682,43 @@ async function setupPeerConnection(isInitiator) {
   const initPromise = (async () => {
     peerConnection = new RTCPeerConnection({
       iceServers: STUN_SERVERS,
-      sdpSemantics: 'unified-plan'
+      sdpSemantics: 'unified-plan',
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      iceCandidatePoolSize: 10
     });
 
-    // Ensure audio & video transceivers for two-way audio & video
-    try {
-      peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-      peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-    } catch (e) {}
-
-    // Attach local audio and video tracks
+    // Attach local audio and video tracks directly
     const stream = await ensureMicrophoneTrack();
     if (stream) {
       stream.getTracks().forEach(track => {
         track.enabled = true;
         if (track.kind === 'audio') {
           applyAudioTrackSettings(track);
-          try {
-            if (track.readyState === 'live') {
-              peerConnection.addTrack(track, stream);
-              console.log(`🎤 Attached track: ${track.kind}`);
-            }
-          } catch (e) {}
-        } else {
-          try {
-            if (track.readyState === 'live') {
-              peerConnection.addTrack(track, stream);
-              console.log(`🎥 Attached track: ${track.kind}`);
-            }
-          } catch (e) {}
+        }
+        try {
+          peerConnection.addTrack(track, stream);
+          console.log(`🎤 Attached track to PeerConnection: ${track.kind} (id: ${track.id})`);
+        } catch (e) {
+          console.warn(`Failed to add ${track.kind} track:`, e);
         }
       });
+    }
+
+    // Ensure recv transceivers if any media kind is missing locally
+    const senders = peerConnection.getSenders();
+    const hasAudio = senders.some(s => s.track && s.track.kind === 'audio');
+    const hasVideo = senders.some(s => s.track && s.track.kind === 'video');
+
+    if (!hasAudio) {
+      try {
+        peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+      } catch (e) {}
+    }
+    if (!hasVideo) {
+      try {
+        peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      } catch (e) {}
     }
 
     // Native ontrack: Attach stream to remoteVideo & remoteAudio with unmuted audio playback
@@ -698,6 +738,7 @@ async function setupPeerConnection(isInitiator) {
         remoteVideo.muted = false;
         remoteVideo.volume = 1.0;
         remoteVideo.playsInline = true;
+        remoteVideo.autoplay = true;
         remoteVideo.play().catch(e => console.log('remoteVideo play:', e));
       }
 
@@ -706,6 +747,7 @@ async function setupPeerConnection(isInitiator) {
         remoteAudio.muted = false;
         remoteAudio.volume = 1.0;
         remoteAudio.playsInline = true;
+        remoteAudio.autoplay = true;
         remoteAudio.play().catch(e => console.log('remoteAudio play:', e));
       }
 
@@ -730,14 +772,17 @@ async function setupPeerConnection(isInitiator) {
 
   if (isInitiator) {
     try {
-      const offer = await peerConnection.createOffer({
+      const rawOffer = await peerConnection.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
         voiceActivityDetection: true
       });
+      const optimizedSdp = optimizeSdp(rawOffer.sdp);
+      const offer = { type: rawOffer.type, sdp: optimizedSdp };
       await peerConnection.setLocalDescription(offer);
-      sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
-      console.log('Sent WebRTC Offer with Audio & Video');
+      applySenderOptimizations(peerConnection);
+      sendSignal('offer', { session_id: sessionId, sdp: offer });
+      console.log('Sent WebRTC Offer with Audio & Video (Low-latency optimized)');
     } catch (e) {
       console.error('Error creating offer:', e);
     }
@@ -750,7 +795,7 @@ function sendSignal(type, data = {}) {
   }
 }
 
-async function unlockAudio() {
+function unlockAudio() {
   if (!audioCtx) {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
@@ -758,7 +803,7 @@ async function unlockAudio() {
     }
   }
   if (audioCtx && audioCtx.state === 'suspended') {
-    await audioCtx.resume().catch(() => {});
+    audioCtx.resume().catch(() => {});
   }
   if (remoteVideo) {
     remoteVideo.muted = false;
@@ -774,8 +819,9 @@ async function unlockAudio() {
 
 // 6. Button Actions
 btnStartMatch.addEventListener('click', async () => {
-  await unlockAudio();
+  unlockAudio();
   await ensureMicrophoneTrack();
+
 
   if (!isConnected && !isMatching) {
     sendSignal('join_queue', { chat_type: 'video' });
@@ -831,6 +877,37 @@ document.querySelectorAll('.nav-link').forEach(link => {
 btnNewChat.addEventListener('click', () => {
   btnStartMatch.click();
 });
+
+if (btnToggleMic) {
+  btnToggleMic.addEventListener('click', () => {
+    isMuted = !isMuted;
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = !isMuted;
+      });
+    }
+    updateMicIndicator(!isMuted);
+    btnToggleMic.innerHTML = isMuted
+      ? '<i class="fa-solid fa-microphone-slash"></i>'
+      : '<i class="fa-solid fa-microphone"></i>';
+    showToast(isMuted ? 'Microphone Muted' : 'Microphone Unmuted');
+  });
+}
+
+if (btnToggleCam) {
+  btnToggleCam.addEventListener('click', () => {
+    isCamOff = !isCamOff;
+    if (localStream) {
+      localStream.getVideoTracks().forEach(track => {
+        track.enabled = !isCamOff;
+      });
+    }
+    btnToggleCam.innerHTML = isCamOff
+      ? '<i class="fa-solid fa-video-slash"></i>'
+      : '<i class="fa-solid fa-video"></i>';
+    showToast(isCamOff ? 'Camera Turned Off' : 'Camera Turned On');
+  });
+}
 
 // Unlock audio on click or touch
 ['click', 'touchstart'].forEach(evt => {

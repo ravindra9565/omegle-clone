@@ -1,43 +1,55 @@
-# Omegle Clone (Pure HTML, CSS, JavaScript)
+# GlobChat - 1-on-1 Video & Audio Chat with Strangers 🌍 💬
 
-A functional, pixel-perfect 1-to-1 random video and text chat platform built with pure **HTML5**, **CSS3**, **Vanilla JavaScript**, **WebRTC**, and a lightweight Python WebSocket server.
+A modern, high-performance, real-time random video & audio chat platform built with pure **HTML5**, **CSS3**, **Vanilla JavaScript (WebRTC)**, and a lightweight **FastAPI** Python signaling backend.
 
 ---
 
-## 📁 Clean Project Structure
+## ✨ Features
+
+- **Simultaneous Video & Audio Calling**: Pure W3C WebRTC peer-to-peer audio & video streaming.
+- **Voice Activity Visualizers**: Real-time Web Audio API frequency analyzers showing live audio levels & speaking waves for both local user and stranger.
+- **Microphone & Camera Controls**: Seamless mic mute/unmute and camera toggle.
+- **Stranger Audio Controls**: Instant stranger audio volume/speaker mute button.
+- **Browser Autoplay Compliance**: Automatic audio context unlock on user interaction.
+- **Real-Time Text Chat**: Instant messaging alongside video with typing indicators and timestamping.
+- **Clean Architecture**: Single unified FastAPI backend with no obsolete dependencies.
+
+---
+
+## 📁 Project Structure
 
 ```text
 omegle/
-├── index.html          # Main HTML structure matching the UI screenshot
-├── style.css           # Styling for navbar, video cards, buttons & chat
-├── app.js              # WebRTC P2P media, WebSocket signaling & text chat logic
-├── server.py           # Standalone WebSocket & HTTP server
+├── index.html          # Clean semantic UI with video, audio & chat components
+├── style.css           # Modern dark-theme glassmorphism styling & audio waveforms
+├── app.js              # WebRTC audio+video streaming, voice meters & signaling logic
+├── server.py           # FastAPI WebSocket signaling & static server
 ├── requirements.txt    # Minimal dependencies (FastAPI + Uvicorn)
 └── README.md
 ```
 
 ---
 
-## 🚀 How to Run
+## 🚀 Quick Start
 
-1. **Activate Virtual Environment or Install Requirements**:
-   ```powershell
-   pip install -r requirements.txt
-   ```
+### 1. Install Dependencies
+```powershell
+pip install -r requirements.txt
+```
 
-2. **Start the Server**:
-   ```powershell
-   python server.py
-   ```
+### 2. Start the Server
+```powershell
+python server.py
+```
 
-3. **Open in Browser**:
-   👉 **`http://localhost:3000`**
+### 3. Open in Browser
+Visit: **`http://localhost:3000`**
 
 ---
 
-## 🧪 Testing with 2 Users (2 Windows)
+## 🧪 Testing with 2 Users
 
-1. Open `http://localhost:3000` in your main browser window. Allow camera & mic permissions.
-2. Open `http://localhost:3000` in an **Incognito Window** (Ctrl + Shift + N) or second browser.
+1. Open `http://localhost:3000` in your primary browser. Allow Camera & Microphone permissions.
+2. Open `http://localhost:3000` in an **Incognito Window** (`Ctrl + Shift + N`) or a second browser.
 3. Click **"Start Match"** in both windows.
-4. Both windows will match instantly with live video streaming and real-time text chat!
+4. You will instantly connect with live video, crystal-clear audio, voice activity waves, and real-time text chat!
