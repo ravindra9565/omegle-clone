@@ -636,25 +636,22 @@ async function setupPeerConnection(isInitiator) {
 
       if (remoteVideo) {
         remoteVideo.srcObject = remoteStream;
-        remoteVideo.muted = false;
-        remoteVideo.volume = 1.0;
         remoteVideo.playsInline = true;
         remoteVideo.autoplay = true;
         remoteVideo.style.display = 'block';
+        remoteVideo.style.zIndex = '5';
         remoteVideo.play().catch(e => {
-          console.warn('remoteVideo unmuted play failed, fallback to muted play:', e);
-          remoteVideo.muted = true;
-          remoteVideo.play().catch(() => {});
+          console.warn('remoteVideo play:', e);
         });
       }
 
       if (remoteAudio) {
         remoteAudio.srcObject = remoteStream;
-        remoteAudio.muted = false;
-        remoteAudio.volume = 1.0;
         remoteAudio.playsInline = true;
         remoteAudio.autoplay = true;
-        remoteAudio.play().catch(e => console.warn('remoteAudio play:', e));
+        remoteAudio.play().catch(e => {
+          console.warn('remoteAudio play:', e);
+        });
       }
 
       if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
