@@ -67,8 +67,6 @@ const prefModal = document.getElementById('prefModal');
 const btnCloseModal = document.getElementById('btnCloseModal');
 const btnFreeMatch = document.getElementById('btnFreeMatch');
 const btnStore = document.getElementById('btnStore');
-const btnPlus = document.getElementById('btnPlus');
-const btnInstall = document.getElementById('btnInstall');
 const profileAvatar = document.getElementById('profileAvatar');
 const authModal = document.getElementById('authModal');
 const authForm = document.getElementById('authForm');
@@ -242,6 +240,41 @@ function updateMicIndicator(active) {
   }
 }
 
+async function requestAudioPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return null;
+  }
+
+  try {
+    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+    const micTrack = audioStream.getAudioTracks()[0];
+    if (!micTrack) {
+      return null;
+    }
+
+    micTrack.enabled = true;
+    applyAudioTrackSettings(micTrack);
+
+    if (localStream) {
+      localStream.addTrack(micTrack);
+    } else {
+      localStream = audioStream;
+    }
+
+    localVideo.srcObject = localStream;
+    localVideo.muted = true;
+    localVideo.play().catch(() => {});
+
+    console.log('🎤 Real microphone track acquired and attached!');
+    updateMicIndicator(true);
+    return localStream;
+  } catch (err) {
+    console.warn('Microphone acquisition error:', err);
+    updateMicIndicator(false);
+    return null;
+  }
+}
+
 // Ensure Microphone Track is Always Attached
 async function ensureMicrophoneTrack() {
   if (!localStream) {
@@ -250,30 +283,11 @@ async function ensureMicrophoneTrack() {
 
   const audioTracks = localStream ? localStream.getAudioTracks() : [];
   if (audioTracks.length === 0) {
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
-        const micTrack = audioStream.getAudioTracks()[0];
-        if (micTrack) {
-          micTrack.enabled = true;
-          applyAudioTrackSettings(micTrack);
-          if (localStream) {
-            localStream.addTrack(micTrack);
-          } else {
-            localStream = audioStream;
-          }
-          console.log('🎤 Real microphone track acquired and attached!');
-          updateMicIndicator(true);
-        }
-      }    } catch (err) {
-      console.warn('Microphone acquisition error:', err);
-      updateMicIndicator(false);
-    }
-  } else {
-    audioTracks.forEach(t => t.enabled = true);
-    updateMicIndicator(true);
+    return requestAudioPermission();
   }
 
+  audioTracks.forEach(t => t.enabled = true);
+  updateMicIndicator(true);
   return localStream;
 }
 
@@ -650,11 +664,20 @@ async function setupPeerConnection(isInitiator) {
         track.enabled = true;
         if (track.kind === 'audio') {
           applyAudioTrackSettings(track);
+          try {
+            if (track.readyState === 'live') {
+              peerConnection.addTrack(track, stream);
+              console.log(`🎤 Attached track: ${track.kind}`);
+            }
+          } catch (e) {}
+        } else {
+          try {
+            if (track.readyState === 'live') {
+              peerConnection.addTrack(track, stream);
+              console.log(`🎥 Attached track: ${track.kind}`);
+            }
+          } catch (e) {}
         }
-        try {
-          peerConnection.addTrack(track, stream);
-          console.log(`🎤 Attached track: ${track.kind}`);
-        } catch (e) {}
       });
     }
 
@@ -727,7 +750,7 @@ function sendSignal(type, data = {}) {
   }
 }
 
-function unlockAudio() {
+async function unlockAudio() {
   if (!audioCtx) {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
@@ -735,7 +758,7 @@ function unlockAudio() {
     }
   }
   if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
+    await audioCtx.resume().catch(() => {});
   }
   if (remoteVideo) {
     remoteVideo.muted = false;
@@ -751,9 +774,8 @@ function unlockAudio() {
 
 // 6. Button Actions
 btnStartMatch.addEventListener('click', async () => {
-  unlockAudio();
+  await unlockAudio();
   await ensureMicrophoneTrack();
-
 
   if (!isConnected && !isMatching) {
     sendSignal('join_queue', { chat_type: 'video' });
@@ -788,14 +810,6 @@ btnFreeMatch.addEventListener('click', () => {
 
 btnStore.addEventListener('click', () => {
   showToast('Store is coming soon.');
-});
-
-btnPlus.addEventListener('click', () => {
-  showToast('PLUS upgrade is coming soon.');
-});
-
-btnInstall.addEventListener('click', () => {
-  showToast('Use your browser menu to install this app.');
 });
 
 profileAvatar.addEventListener('click', openAuthModal);

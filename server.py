@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import random
 import asyncio
 import logging
 import hashlib
@@ -143,9 +144,12 @@ class SignalingManager:
             self.waiting_queue.remove(user_id)
 
         while len(self.waiting_queue) > 0:
-            peer_id = self.waiting_queue.pop(0)
-            if peer_id == user_id or peer_id not in self.active_sockets:
-                continue
+            candidate_pool = [peer_id for peer_id in self.waiting_queue if peer_id != user_id and peer_id in self.active_sockets]
+            if not candidate_pool:
+                break
+
+            peer_id = random.choice(candidate_pool)
+            self.waiting_queue.remove(peer_id)
 
             session_id = str(uuid.uuid4())
             self.active_sessions[session_id] = {
@@ -251,5 +255,14 @@ async def serve_js():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    cert_file = os.environ.get("SSL_CERTFILE") or os.path.join(base_dir, "cert.pem")
+    key_file = os.environ.get("SSL_KEYFILE") or os.path.join(base_dir, "key.pem")
+    kwargs = {"host": "0.0.0.0", "port": port, "reload": False}
+
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        kwargs["ssl_certfile"] = cert_file
+        kwargs["ssl_keyfile"] = key_file
+
+    uvicorn.run("server:app", **kwargs)
 
