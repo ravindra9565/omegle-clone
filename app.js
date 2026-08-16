@@ -445,21 +445,50 @@ async function handleLogout() {
   }
 }
 
+// 4. Safe ICE Candidate Queue & Drainage
+async function addIceCandidateSafely(candidate) {
+  if (!candidate) return;
+  if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
+    try {
+      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log('❄️ Added ICE candidate directly');
+    } catch (e) {
+      console.warn('addIceCandidate error:', e);
+    }
+  } else {
+    pendingCandidates.push(candidate);
+    console.log('⏳ Queued ICE candidate. Pending count:', pendingCandidates.length);
+  }
+}
+
+async function drainPendingIceCandidates() {
+  if (!peerConnection || !peerConnection.remoteDescription) return;
+  console.log(`🚀 Draining ${pendingCandidates.length} pending ICE candidates...`);
+  while (pendingCandidates.length > 0) {
+    const cand = pendingCandidates.shift();
+    try {
+      await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+    } catch (e) {
+      console.warn('Error applying queued ICE candidate:', e);
+    }
+  }
+}
+
 // 3. Handle Signaling Events
 async function handleSignalEvent(payload) {
-  const { type, session_id, role, sdp, candidate, text, is_typing, peer_id, image } = payload;
+  const { type, session_id, role, sdp, candidate, text, is_typing, peer_id } = payload;
 
   switch (type) {
     case 'searching':
       isMatching = true;
       isConnected = false;
       remoteStream = null;
+      pendingCandidates = [];
       matchStatusText.textContent = 'Searching for a stranger...';
       startBtnText.textContent = 'Searching...';
       btnStartMatch.className = 'bottom-btn btn-start-match matching';
       strangerPlaceholder.style.display = 'flex';
       strangerBadge.style.display = 'none';
-      if (remoteCanvas) remoteCanvas.style.display = 'none';
       remoteVideo.style.display = 'none';
       messageInput.disabled = true;
       btnSendMessage.disabled = true;
@@ -471,6 +500,7 @@ async function handleSignalEvent(payload) {
       isMatching = false;
       isConnected = true;
       remoteStream = null;
+      pendingCandidates = [];
       matchStatusText.textContent = 'Connected! Live video & voice...';
       startBtnText.textContent = 'Next Match';
       btnStartMatch.className = 'bottom-btn btn-start-match connected';
@@ -481,35 +511,23 @@ async function handleSignalEvent(payload) {
       strangerPlaceholder.style.display = 'none';
       strangerBadge.style.display = 'block';
       remoteVideo.style.display = 'block';
-      remoteVideo.muted = false; // UNMUTE stranger video for native speaker audio
+      remoteVideo.muted = false;
       remoteVideo.volume = 1.0;
 
       await setupPeerConnection(role === 'initiator');
-      startFrameStreaming();
-      break;
-
-    case 'video_frame':
-      if (image) {
-        renderRemoteFrame(image);
-      }
       break;
 
     case 'offer':
       console.log('Received WebRTC Offer, setting up answer...');
+      sessionId = session_id || sessionId;
       if (peerConnectionInitPromise) {
         await peerConnectionInitPromise;
-      } else {
+      } else if (!peerConnection) {
         await setupPeerConnection(false);
       }
       try {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-        
-        while (pendingCandidates.length > 0) {
-          const cand = pendingCandidates.shift();
-          try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
-          } catch (e) {}
-        }
+        await drainPendingIceCandidates();
 
         const answer = await peerConnection.createAnswer({
           offerToReceiveAudio: true,
@@ -528,13 +546,7 @@ async function handleSignalEvent(payload) {
       if (peerConnection && peerConnection.signalingState !== 'stable') {
         try {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-
-          while (pendingCandidates.length > 0) {
-            const cand = pendingCandidates.shift();
-            try {
-              await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
-            } catch (e) {}
-          }
+          await drainPendingIceCandidates();
           console.log('WebRTC audio & video connected stably.');
         } catch (e) {
           console.error('Error handling answer:', e);
@@ -544,13 +556,7 @@ async function handleSignalEvent(payload) {
 
     case 'ice_candidate':
       if (candidate) {
-        if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
-          try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {}
-        } else {
-          pendingCandidates.push(candidate);
-        }
+        await addIceCandidateSafely(candidate);
       }
       break;
 
@@ -569,51 +575,8 @@ async function handleSignalEvent(payload) {
   }
 }
 
-
-
-// 5. Live Frame Streaming Relay Fallback
-function startFrameStreaming() {
-  stopFrameStreaming();
-  frameStreamTimer = setInterval(() => {
-    if (!isConnected || !sessionId) return;
-    try {
-      if (localVideo && localVideo.readyState >= 2) {
-        captureCtx.drawImage(localVideo, 0, 0, captureCanvas.width, captureCanvas.height);
-        const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.45);
-        sendSignal('video_frame', { session_id: sessionId, image: dataUrl });
-      }
-    } catch (e) {}
-  }, 100);
-}
-
-function stopFrameStreaming() {
-  if (frameStreamTimer) {
-    clearInterval(frameStreamTimer);
-    frameStreamTimer = null;
-  }
-}
-
-function renderRemoteFrame(dataUrl) {
-  if (!remoteCanvas) return;
-  const img = new Image();
-  img.onload = () => {
-    remoteCanvas.style.display = 'block';
-    remoteVideo.style.display = 'none';
-    strangerPlaceholder.style.display = 'none';
-    strangerBadge.style.display = 'block';
-
-    remoteCanvas.width = img.width;
-    remoteCanvas.height = img.height;
-    const ctx = remoteCanvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-  };
-  img.src = dataUrl;
-}
-
-// 6. Setup WebRTC Peer Connection (Ultra-Low Latency Implementation)
+// 5. Setup WebRTC Peer Connection
 async function setupPeerConnection(isInitiator) {
-  pendingCandidates = [];
-
   if (peerConnection) {
     try {
       peerConnection.close();
