@@ -10,9 +10,7 @@ const STUN_SERVERS = [
 const AUDIO_CONSTRAINTS = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true,
-  channelCount: 2,
-  sampleRate: 48000
+  autoGainControl: true
 };
 
 const VIDEO_CONSTRAINTS = {
@@ -38,11 +36,14 @@ let isMuted = false;
 let isCamOff = false;
 let pendingCandidates = [];
 let frameStreamTimer = null;
+let audioCtx = null;
 
 // DOM Elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
+const remoteAudio = document.getElementById('remoteAudio');
 const remoteCanvas = document.getElementById('remoteCanvas');
+
 const localOverlay = document.getElementById('localOverlay');
 const strangerPlaceholder = document.getElementById('strangerPlaceholder');
 const matchStatusText = document.getElementById('matchStatusText');
@@ -632,26 +633,32 @@ async function setupPeerConnection(isInitiator) {
 
   const initPromise = (async () => {
     peerConnection = new RTCPeerConnection({
-    iceServers: STUN_SERVERS,
-    sdpSemantics: 'unified-plan'
-  });
-
-  // Attach local audio and video tracks
-  const stream = await ensureMicrophoneTrack();
-  if (stream) {
-    stream.getTracks().forEach(track => {
-      track.enabled = true;
-      if (track.kind === 'audio') {
-        applyAudioTrackSettings(track);
-      }
-      try {
-        peerConnection.addTrack(track, stream);
-        console.log(`🎤 Attached track: ${track.kind}`);
-      } catch (e) {}
+      iceServers: STUN_SERVERS,
+      sdpSemantics: 'unified-plan'
     });
-  }
 
-    // Native ontrack: Attach stream to remoteVideo with unmuted audio playback
+    // Ensure audio & video transceivers for two-way audio & video
+    try {
+      peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+      peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+    } catch (e) {}
+
+    // Attach local audio and video tracks
+    const stream = await ensureMicrophoneTrack();
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        track.enabled = true;
+        if (track.kind === 'audio') {
+          applyAudioTrackSettings(track);
+        }
+        try {
+          peerConnection.addTrack(track, stream);
+          console.log(`🎤 Attached track: ${track.kind}`);
+        } catch (e) {}
+      });
+    }
+
+    // Native ontrack: Attach stream to remoteVideo & remoteAudio with unmuted audio playback
     peerConnection.ontrack = (event) => {
       console.log('🎥 Track received:', event.track.kind);
       
@@ -663,12 +670,21 @@ async function setupPeerConnection(isInitiator) {
         remoteStream.addTrack(event.track);
       }
 
-      remoteVideo.srcObject = remoteStream;
-      remoteVideo.muted = false;
-      remoteVideo.volume = 1.0;
-      remoteVideo.playsInline = true;
-      remoteVideo.playbackRate = 1;
-      remoteVideo.play().catch(e => console.log('remoteVideo play:', e));
+      if (remoteVideo) {
+        remoteVideo.srcObject = remoteStream;
+        remoteVideo.muted = false;
+        remoteVideo.volume = 1.0;
+        remoteVideo.playsInline = true;
+        remoteVideo.play().catch(e => console.log('remoteVideo play:', e));
+      }
+
+      if (remoteAudio) {
+        remoteAudio.srcObject = remoteStream;
+        remoteAudio.muted = false;
+        remoteAudio.volume = 1.0;
+        remoteAudio.playsInline = true;
+        remoteAudio.play().catch(e => console.log('remoteAudio play:', e));
+      }
 
       if (remoteCanvas) remoteCanvas.style.display = 'none';
       remoteVideo.style.display = 'block';
@@ -693,7 +709,8 @@ async function setupPeerConnection(isInitiator) {
     try {
       const offer = await peerConnection.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: true
+        offerToReceiveVideo: true,
+        voiceActivityDetection: true
       });
       await peerConnection.setLocalDescription(offer);
       sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
@@ -710,14 +727,33 @@ function sendSignal(type, data = {}) {
   }
 }
 
+function unlockAudio() {
+  if (!audioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) {
+      audioCtx = new AudioCtx();
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+  if (remoteVideo) {
+    remoteVideo.muted = false;
+    remoteVideo.volume = 1.0;
+    remoteVideo.play().catch(() => {});
+  }
+  if (remoteAudio) {
+    remoteAudio.muted = false;
+    remoteAudio.volume = 1.0;
+    remoteAudio.play().catch(() => {});
+  }
+}
+
 // 6. Button Actions
 btnStartMatch.addEventListener('click', async () => {
-  // Prime remoteVideo audio on user click
-  remoteVideo.muted = false;
-  remoteVideo.volume = 1.0;
-  remoteVideo.play().catch(() => {});
-
+  unlockAudio();
   await ensureMicrophoneTrack();
+
 
   if (!isConnected && !isMatching) {
     sendSignal('join_queue', { chat_type: 'video' });
@@ -783,13 +819,12 @@ btnNewChat.addEventListener('click', () => {
 });
 
 // Unlock audio on click or touch
-document.addEventListener('click', () => {
-  if (remoteVideo) {
-    remoteVideo.muted = false;
-    remoteVideo.volume = 1.0;
-    remoteVideo.play().catch(() => {});
-  }
-}, { once: true });
+['click', 'touchstart'].forEach(evt => {
+  document.addEventListener(evt, () => {
+    unlockAudio();
+  });
+});
+
 
 function handleStrangerDisconnected() {
   stopFrameStreaming();
