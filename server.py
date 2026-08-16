@@ -274,17 +274,29 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.get("/")
 async def serve_index():
-    return FileResponse(os.path.join(BASE_DIR, "index.html"), media_type="text/html")
+    return FileResponse(
+        os.path.join(BASE_DIR, "index.html"),
+        media_type="text/html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 
 @app.get("/style.css")
 async def serve_css():
-    return FileResponse(os.path.join(BASE_DIR, "style.css"), media_type="text/css")
+    return FileResponse(
+        os.path.join(BASE_DIR, "style.css"),
+        media_type="text/css",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 
 @app.get("/app.js")
 async def serve_js():
-    return FileResponse(os.path.join(BASE_DIR, "app.js"), media_type="application/javascript")
+    return FileResponse(
+        os.path.join(BASE_DIR, "app.js"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 
 # =========================================================
