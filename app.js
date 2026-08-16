@@ -1,10 +1,21 @@
-// Configuration
+// Configuration - High Availability STUN & TURN Relay Servers
 const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' }
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp'
+    ],
+    username: 'openrelay',
+    credential: 'openrelay'
+  }
 ];
 
 const AUDIO_CONSTRAINTS = {
@@ -723,14 +734,22 @@ async function setupPeerConnection(isInitiator) {
 
     // Native ontrack: Attach stream to remoteVideo & remoteAudio with unmuted audio playback
     peerConnection.ontrack = (event) => {
-      console.log('🎥 Track received:', event.track.kind);
+      console.log('🎥 WebRTC Track received:', event.track.kind, event.track.id);
       
       if (!remoteStream) {
-        remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream();
+        remoteStream = new MediaStream();
       }
       
-      if (!remoteStream.getTracks().includes(event.track)) {
+      if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
         remoteStream.addTrack(event.track);
+      }
+
+      if (event.streams && event.streams[0]) {
+        event.streams[0].getTracks().forEach(t => {
+          if (!remoteStream.getTracks().some(existing => existing.id === t.id)) {
+            remoteStream.addTrack(t);
+          }
+        });
       }
 
       if (remoteVideo) {
@@ -739,7 +758,8 @@ async function setupPeerConnection(isInitiator) {
         remoteVideo.volume = 1.0;
         remoteVideo.playsInline = true;
         remoteVideo.autoplay = true;
-        remoteVideo.play().catch(e => console.log('remoteVideo play:', e));
+        remoteVideo.style.display = 'block';
+        remoteVideo.play().catch(e => console.warn('remoteVideo play:', e));
       }
 
       if (remoteAudio) {
@@ -748,14 +768,33 @@ async function setupPeerConnection(isInitiator) {
         remoteAudio.volume = 1.0;
         remoteAudio.playsInline = true;
         remoteAudio.autoplay = true;
-        remoteAudio.play().catch(e => console.log('remoteAudio play:', e));
+        remoteAudio.play().catch(e => console.warn('remoteAudio play:', e));
       }
 
       if (remoteCanvas) remoteCanvas.style.display = 'none';
-      remoteVideo.style.display = 'block';
       strangerPlaceholder.style.display = 'none';
       strangerBadge.style.display = 'block';
       matchStatusText.textContent = 'Live Connected!';
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      console.log('🔗 WebRTC Connection State:', peerConnection.connectionState);
+      if (peerConnection.connectionState === 'connected') {
+        if (remoteVideo) remoteVideo.style.display = 'block';
+        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        matchStatusText.textContent = 'Live Connected!';
+      } else if (peerConnection.connectionState === 'failed') {
+        console.warn('WebRTC connection failed, attempting ICE restart...');
+        try { peerConnection.restartIce(); } catch (e) {}
+      }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+      console.log('❄️ ICE Connection State:', peerConnection.iceConnectionState);
+      if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+        if (remoteVideo) remoteVideo.style.display = 'block';
+        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+      }
     };
 
     peerConnection.onicecandidate = (event) => {
@@ -938,35 +977,7 @@ function handleStrangerDisconnected() {
   addMessage('Stranger has disconnected.', 'system');
 }
 
-// 7. Media Toggles
-btnToggleMic.addEventListener('click', async () => {
-  if (!localStream || localStream.getAudioTracks().length === 0) {
-    await ensureMicrophoneTrack();
-  }
 
-  if (localStream) {
-    const audioTracks = localStream.getAudioTracks();
-    if (audioTracks.length > 0) {
-      isMuted = !isMuted;
-      audioTracks.forEach(t => t.enabled = !isMuted);
-      btnToggleMic.classList.toggle('off', isMuted);
-      btnToggleMic.innerHTML = isMuted ? '<i class="fa-solid fa-microphone-slash"></i>' : '<i class="fa-solid fa-microphone"></i>';
-      updateMicIndicator(!isMuted);
-    }
-  }
-});
-
-btnToggleCam.addEventListener('click', () => {
-  if (localStream) {
-    const videoTracks = localStream.getVideoTracks();
-    if (videoTracks.length > 0) {
-      isCamOff = !isCamOff;
-      videoTracks.forEach(t => t.enabled = !isCamOff);
-      btnToggleCam.classList.toggle('off', isCamOff);
-      btnToggleCam.innerHTML = isCamOff ? '<i class="fa-solid fa-video-slash"></i>' : '<i class="fa-solid fa-video"></i>';
-    }
-  }
-});
 
 const btnGender = document.getElementById('btnGender');
 let genderMode = 'any';
