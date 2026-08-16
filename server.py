@@ -193,24 +193,24 @@ class SignalingManager:
 
                 logger.info(f"MATCH CREATED: {user_id} <===> {peer_id} (Session: {session_id})")
 
-                asyncio.create_task(self.send_to_user(user_id, {
+                await self.send_to_user(user_id, {
                     "type": "matched",
                     "session_id": session_id,
                     "role": "initiator",
                     "peer_id": peer_id
-                }))
-                asyncio.create_task(self.send_to_user(peer_id, {
+                })
+                await self.send_to_user(peer_id, {
                     "type": "matched",
                     "session_id": session_id,
                     "role": "receiver",
                     "peer_id": user_id
-                }))
+                })
                 return
 
             # No peer available -> Add to waiting queue
             self.waiting_queue.append(user_id)
             logger.info(f"User {user_id} waiting in queue. (Queue count: {len(self.waiting_queue)})")
-            asyncio.create_task(self.send_to_user(user_id, {"type": "searching"}))
+            await self.send_to_user(user_id, {"type": "searching"})
 
     async def handle_next(self, user_id: str, session_id: Optional[str] = None):
         await self.join_queue(user_id)

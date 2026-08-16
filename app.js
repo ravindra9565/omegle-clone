@@ -501,18 +501,16 @@ async function handleSignalEvent(payload) {
       isConnected = true;
       remoteStream = null;
       pendingCandidates = [];
-      matchStatusText.textContent = 'Connected! Live video & voice...';
+      matchStatusText.textContent = 'Connecting with stranger...';
       startBtnText.textContent = 'Next Match';
       btnStartMatch.className = 'bottom-btn btn-start-match connected';
       messageInput.disabled = false;
       btnSendMessage.disabled = false;
       messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
 
-      strangerPlaceholder.style.display = 'none';
-      strangerBadge.style.display = 'block';
-      remoteVideo.style.display = 'block';
-      remoteVideo.muted = false;
-      remoteVideo.volume = 1.0;
+      strangerPlaceholder.style.display = 'flex';
+      strangerBadge.style.display = 'none';
+      remoteVideo.style.display = 'none';
 
       await setupPeerConnection(role === 'initiator');
       break;
@@ -586,22 +584,18 @@ async function setupPeerConnection(isInitiator) {
 
   const initPromise = (async () => {
     peerConnection = new RTCPeerConnection({
-      iceServers: STUN_SERVERS,
-      sdpSemantics: 'unified-plan',
-      bundlePolicy: 'max-bundle',
-      rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: 10
+      iceServers: STUN_SERVERS
     });
 
     // Attach local audio and video tracks directly
     const stream = await ensureMicrophoneTrack();
     if (stream) {
       stream.getTracks().forEach(track => {
-        track.enabled = true;
-        if (track.kind === 'audio') {
-          applyAudioTrackSettings(track);
-        }
         try {
+          track.enabled = true;
+          if (track.kind === 'audio') {
+            applyAudioTrackSettings(track);
+          }
           peerConnection.addTrack(track, stream);
           console.log(`🎤 Attached track to PeerConnection: ${track.kind} (id: ${track.id})`);
         } catch (e) {
@@ -611,20 +605,14 @@ async function setupPeerConnection(isInitiator) {
     }
 
     // Ensure recv transceivers if any media kind is missing locally
-    const senders = peerConnection.getSenders();
-    const hasAudio = senders.some(s => s.track && s.track.kind === 'audio');
-    const hasVideo = senders.some(s => s.track && s.track.kind === 'video');
+    try {
+      const senders = peerConnection.getSenders();
+      const hasAudio = senders.some(s => s.track && s.track.kind === 'audio');
+      const hasVideo = senders.some(s => s.track && s.track.kind === 'video');
 
-    if (!hasAudio) {
-      try {
-        peerConnection.addTransceiver('audio', { direction: 'recvonly' });
-      } catch (e) {}
-    }
-    if (!hasVideo) {
-      try {
-        peerConnection.addTransceiver('video', { direction: 'recvonly' });
-      } catch (e) {}
-    }
+      if (!hasAudio) peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+      if (!hasVideo) peerConnection.addTransceiver('video', { direction: 'recvonly' });
+    } catch (e) {}
 
     // Native ontrack: Attach stream to remoteVideo & remoteAudio with unmuted audio playback
     peerConnection.ontrack = (event) => {
@@ -653,7 +641,11 @@ async function setupPeerConnection(isInitiator) {
         remoteVideo.playsInline = true;
         remoteVideo.autoplay = true;
         remoteVideo.style.display = 'block';
-        remoteVideo.play().catch(e => console.warn('remoteVideo play:', e));
+        remoteVideo.play().catch(e => {
+          console.warn('remoteVideo unmuted play failed, fallback to muted play:', e);
+          remoteVideo.muted = true;
+          remoteVideo.play().catch(() => {});
+        });
       }
 
       if (remoteAudio) {
@@ -665,17 +657,19 @@ async function setupPeerConnection(isInitiator) {
         remoteAudio.play().catch(e => console.warn('remoteAudio play:', e));
       }
 
-      if (remoteCanvas) remoteCanvas.style.display = 'none';
-      strangerPlaceholder.style.display = 'none';
-      strangerBadge.style.display = 'block';
-      matchStatusText.textContent = 'Live Connected!';
+      if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+      if (strangerBadge) strangerBadge.style.display = 'block';
+      if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
     };
 
     peerConnection.onconnectionstatechange = () => {
       console.log('🔗 WebRTC Connection State:', peerConnection.connectionState);
       if (peerConnection.connectionState === 'connected') {
-        if (remoteVideo) remoteVideo.style.display = 'block';
-        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        if (remoteStream && remoteStream.getVideoTracks().length > 0) {
+          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+          if (remoteVideo) remoteVideo.style.display = 'block';
+          if (strangerBadge) strangerBadge.style.display = 'block';
+        }
         matchStatusText.textContent = 'Live Connected!';
       } else if (peerConnection.connectionState === 'failed') {
         console.warn('WebRTC connection failed, attempting ICE restart...');
@@ -686,8 +680,11 @@ async function setupPeerConnection(isInitiator) {
     peerConnection.oniceconnectionstatechange = () => {
       console.log('❄️ ICE Connection State:', peerConnection.iceConnectionState);
       if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-        if (remoteVideo) remoteVideo.style.display = 'block';
-        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        if (remoteStream && remoteStream.getVideoTracks().length > 0) {
+          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+          if (remoteVideo) remoteVideo.style.display = 'block';
+          if (strangerBadge) strangerBadge.style.display = 'block';
+        }
       }
     };
 
