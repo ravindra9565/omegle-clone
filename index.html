@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omegle - Talk to Strangers!</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Nunito:wght@800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+
+  <!-- TOP HEADER -->
+  <header class="navbar">
+    <div class="nav-left">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M50 8C26.8 8 8 26.8 8 50C8 73.2 26.8 92 50 92C57.4 92 64.4 90.1 70.4 86.8L88 92L82.8 74.4C87.3 67.5 90 59.1 90 50C90 26.8 72.1 8 50 8ZM50 72C37.8 72 28 62.2 28 50C28 37.8 37.8 28 50 28C62.2 28 72 37.8 72 50C72 62.2 62.2 72 50 72Z" fill="#3B82F6"/>
+            <path d="M50 36C42.3 36 36 42.3 36 50C36 57.7 42.3 64 50 64C57.7 64 64 57.7 64 50C64 42.3 57.7 36 50 36Z" fill="#FFFFFF"/>
+          </svg>
+        </div>
+        <span class="logo-text">omegle</span>
+      </div>
+
+      <nav class="nav-links">
+        <a href="#" class="nav-link active">VIDEO CHAT</a>
+        <a href="#" class="nav-link">MESSAGE</a>
+        <a href="#" class="nav-link">HISTORY</a>
+      </nav>
+    </div>
+
+    <div class="nav-right">
+      <button class="btn-freematch" id="btnFreeMatch">
+        <span>FreeMatch</span>
+      </button>
+      <button class="btn-store" id="btnStore">
+        <span>Store</span>
+      </button>
+      <button class="btn-plus" id="btnPlus">
+        <i class="fa-solid fa-crown"></i> PLUS
+      </button>
+      <button class="btn-install" id="btnInstall">
+        <i class="fa-solid fa-mobile-screen"></i> Install
+      </button>
+      <div class="profile-avatar" id="profileAvatar" title="Account">
+        <i class="fa-solid fa-user"></i>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CHAT CONTAINER (3 COLUMNS: YOU, STRANGER, CHAT) -->
+  <main class="main-container">
+    
+    <!-- LEFT: YOUR VIDEO -->
+    <div class="video-card you-card">
+      <video id="localVideo" autoplay playsinline muted></video>
+      <div class="video-overlay you-overlay" id="localOverlay">
+        <div class="camera-status" id="cameraStatus">
+          <i class="fa-solid fa-video-slash"></i>
+          <span>Camera Starting...</span>
+        </div>
+      </div>
+      <div class="badge-tag">YOU</div>
+      
+      <!-- Video controls overlay (Mute / Cam off) -->
+      <div class="local-media-controls">
+        <button class="media-btn" id="btnToggleMic" title="Mute/Unmute Mic">
+          <i class="fa-solid fa-microphone"></i>
+        </button>
+        <button class="media-btn" id="btnToggleCam" title="Turn Camera Off/On">
+          <i class="fa-solid fa-video"></i>
+        </button>
+        <span id="micStatusIndicator" style="font-size: 11px; color: #22c55e; font-weight: 700; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; display: flex; align-items: center; gap: 4px;">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e;"></span> Mic On
+        </span>
+      </div>
+    </div>
+
+    <!-- CENTER: STRANGER VIDEO -->
+    <div class="video-card stranger-card">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <canvas id="remoteCanvas" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 8; display: none;"></canvas>
+      
+      <!-- Placeholder when not connected -->
+      <div class="video-placeholder" id="strangerPlaceholder">
+        <div class="center-logo-box">
+          <div class="center-logo-icon">
+            <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M50 8C26.8 8 8 26.8 8 50C8 73.2 26.8 92 50 92C57.4 92 64.4 90.1 70.4 86.8L88 92L82.8 74.4C87.3 67.5 90 59.1 90 50C90 26.8 72.1 8 50 8ZM50 72C37.8 72 28 62.2 28 50C28 37.8 37.8 28 50 28C62.2 28 72 37.8 72 50C72 62.2 62.2 72 50 72Z" fill="#FFFFFF"/>
+            </svg>
+          </div>
+          <div class="online-count">
+            <span class="count-num" id="onlineCount">38686</span> <span class="count-plus">+ Online</span>
+          </div>
+        </div>
+        <div class="status-banner" id="matchStatusText">Click "Start Match" to meet someone!</div>
+      </div>
+
+      <div class="badge-tag stranger-tag" id="strangerBadge" style="display: none;">STRANGER</div>
+    </div>
+
+    <!-- RIGHT: TEXT CHAT / INFO BOX -->
+    <div class="chat-card">
+      
+      <!-- Welcome Message Box -->
+      <div class="chat-welcome" id="chatWelcome">
+        <p class="welcome-text">
+          Ready to chat with new friends worldwide? Start matching for an enjoyable and fun communication experience! 🌍 💬
+        </p>
+        <button class="btn-new-chat" id="btnNewChat">New Chat</button>
+      </div>
+
+      <!-- Messages Stream (Shown when active) -->
+      <div class="messages-container" id="messagesContainer">
+        <div class="message system-msg">
+          <span>You are connected to a random stranger. Say Hi!</span>
+        </div>
+      </div>
+
+      <!-- Typing indicator -->
+      <div class="typing-indicator" id="typingIndicator" style="display: none;">
+        <span>Stranger is typing...</span>
+      </div>
+
+      <!-- Chat Input Field -->
+      <div class="chat-input-bar">
+        <input type="text" id="messageInput" placeholder="Type a message..." disabled autocomplete="off" />
+        <button id="btnSendMessage" disabled>
+          <i class="fa-solid fa-paper-plane"></i>
+        </button>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- BOTTOM CONTROL BUTTONS -->
+  <footer class="bottom-bar">
+    <button class="bottom-btn btn-gender" id="btnGender">
+      <i class="fa-solid fa-venus-mars"></i> Male & Female
+    </button>
+
+    <button class="bottom-btn btn-preferences" id="btnPreferences">
+      <i class="fa-solid fa-sliders"></i> Preferences
+    </button>
+
+    <button class="bottom-btn btn-start-match" id="btnStartMatch">
+      <span id="startBtnText">Start Match</span>
+    </button>
+  </footer>
+
+  <!-- SIMPLE MODAL FOR PREFERENCES -->
+  <div class="modal-backdrop" id="prefModal" style="display: none;">
+    <div class="modal-box">
+      <h3>Match Preferences</h3>
+      <p>Filter matching location & gender:</p>
+      <div class="pref-options">
+        <label><input type="radio" name="genderPref" checked> Any Gender (Fastest)</label>
+        <label><input type="radio" name="genderPref"> Female Only (PLUS)</label>
+        <label><input type="radio" name="genderPref"> Male Only (PLUS)</label>
+      </div>
+      <button class="modal-close-btn" id="btnCloseModal">Save & Close</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="authModal" style="display: none;">
+    <div class="auth-box">
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-auth-tab="login" type="button">Login</button>
+        <button class="auth-tab" data-auth-tab="signup" type="button">Sign Up</button>
+      </div>
+
+      <div class="auth-profile" id="authProfileBox" style="display: none;">
+        <div class="profile-card">
+          <div class="profile-avatar-large" id="profileAvatarLarge">U</div>
+          <div>
+            <div class="profile-name" id="profileNameText">User</div>
+            <div class="profile-email" id="profileEmailText">user@example.com</div>
+          </div>
+        </div>
+        <button class="secondary-btn" id="btnLogout" type="button">Logout</button>
+      </div>
+
+      <form id="authForm" class="auth-form">
+        <div class="field-group" id="nameField" style="display: none;">
+          <label for="fullName">Full Name</label>
+          <input id="fullName" type="text" placeholder="Enter your full name" />
+        </div>
+
+        <div class="field-group">
+          <label for="authEmail">Email</label>
+          <input id="authEmail" type="email" placeholder="name@example.com" required />
+        </div>
+
+        <div class="field-group">
+          <label for="authPassword">Password</label>
+          <input id="authPassword" type="password" placeholder="Enter password" required />
+        </div>
+
+        <button class="primary-btn" id="authSubmitBtn" type="submit">Login</button>
+        <div class="auth-status" id="authStatus"></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
