@@ -256,11 +256,12 @@ async def serve_js():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    enable_ssl = os.environ.get("ENABLE_SSL", "false").lower() in ("true", "1")
     cert_file = os.environ.get("SSL_CERTFILE") or os.path.join(base_dir, "cert.pem")
     key_file = os.environ.get("SSL_KEYFILE") or os.path.join(base_dir, "key.pem")
     kwargs = {"host": "0.0.0.0", "port": port, "reload": False}
 
-    if os.path.exists(cert_file) and os.path.exists(key_file):
+    if enable_ssl and os.path.exists(cert_file) and os.path.exists(key_file):
         kwargs["ssl_certfile"] = cert_file
         kwargs["ssl_keyfile"] = key_file
 
