@@ -172,7 +172,9 @@ function applyAudioTrackSettings(track) {
 
 // 1. Initialize Local Camera and Microphone
 async function initLocalCamera() {
-  if (localStream && localStream.getAudioTracks().length > 0) return localStream;
+  if (localStream && localStream.getAudioTracks().length > 0 && localStream.getVideoTracks().length > 0) {
+    return localStream;
+  }
   
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
     try {
@@ -185,7 +187,7 @@ async function initLocalCamera() {
         applyAudioTrackSettings(track);
       });
       localVideo.srcObject = localStream;
-      localVideo.muted = true; // Local preview is muted so you don't hear yourself
+      localVideo.muted = true; // Local preview is muted
       localVideo.playsInline = true;
       localVideo.play().catch(() => {});
       localOverlay.style.display = 'none';
@@ -255,38 +257,11 @@ function updateMicIndicator(active) {
   }
 }
 
-// Ensure Microphone Track is Always Attached
+// Ensure Camera and Microphone Tracks are Always Attached
 async function ensureMicrophoneTrack() {
-  if (!localStream) {
+  if (!localStream || localStream.getAudioTracks().length === 0 || localStream.getVideoTracks().length === 0) {
     await initLocalCamera();
   }
-
-  const audioTracks = localStream ? localStream.getAudioTracks() : [];
-  if (audioTracks.length === 0) {
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
-        const micTrack = audioStream.getAudioTracks()[0];
-        if (micTrack) {
-          micTrack.enabled = true;
-          applyAudioTrackSettings(micTrack);
-          if (localStream) {
-            localStream.addTrack(micTrack);
-          } else {
-            localStream = audioStream;
-          }
-          console.log('🎤 Real microphone track acquired and attached!');
-          updateMicIndicator(true);
-        }
-      }    } catch (err) {
-      console.warn('Microphone acquisition error:', err);
-      updateMicIndicator(false);
-    }
-  } else {
-    audioTracks.forEach(t => t.enabled = true);
-    updateMicIndicator(true);
-  }
-
   return localStream;
 }
 
@@ -536,16 +511,13 @@ async function handleSignalEvent(payload) {
           } catch (e) {}
         }
 
-        const rawAnswer = await peerConnection.createAnswer({
+        const answer = await peerConnection.createAnswer({
           offerToReceiveAudio: true,
           offerToReceiveVideo: true
         });
-        const optimizedSdp = optimizeSdp(rawAnswer.sdp);
-        const answer = { type: rawAnswer.type, sdp: optimizedSdp };
         await peerConnection.setLocalDescription(answer);
-        applySenderOptimizations(peerConnection);
-        sendSignal('answer', { session_id: sessionId, sdp: answer });
-        console.log('Sent WebRTC Answer with Audio & Video (Low-latency optimized)');
+        sendSignal('answer', { session_id: sessionId, sdp: { type: answer.type, sdp: answer.sdp } });
+        console.log('Sent WebRTC Answer with Audio & Video');
       } catch (e) {
         console.error('Error handling offer:', e);
       }
@@ -597,48 +569,7 @@ async function handleSignalEvent(payload) {
   }
 }
 
-// 4. Ultra Low Latency & High-Speed Media Optimization
-function optimizeSdp(sdpStr) {
-  if (!sdpStr) return sdpStr;
-  let modified = sdpStr;
-  // Tune Opus audio for instantaneous low-latency speech
-  if (modified.includes('opus/48000')) {
-    if (!modified.includes('minptime=10')) {
-      modified = modified.replace(
-        /a=rtpmap:(\d+) opus\/48000\/2/g,
-        'a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0;usedtx=1;cbr=0;maxaveragebitrate=64000'
-      );
-    }
-  }
-  return modified;
-}
 
-function applySenderOptimizations(pc) {
-  if (!pc || !pc.getSenders) return;
-  pc.getSenders().forEach(sender => {
-    if (!sender.track) return;
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
-      }
-      if (sender.track.kind === 'video') {
-        params.encodings[0].maxBitrate = 1500000;
-        params.encodings[0].networkPriority = 'high';
-        params.encodings[0].priority = 'high';
-        params.encodings[0].maxFramerate = 30;
-      } else if (sender.track.kind === 'audio') {
-        params.encodings[0].maxBitrate = 64000;
-        params.encodings[0].networkPriority = 'high';
-        params.encodings[0].priority = 'high';
-      }
-      if ('degradationPreference' in params) {
-        params.degradationPreference = 'maintain-framerate';
-      }
-      sender.setParameters(params).catch(() => {});
-    } catch (e) {}
-  });
-}
 
 // 5. Live Frame Streaming Relay Fallback
 function startFrameStreaming() {
@@ -811,17 +742,14 @@ async function setupPeerConnection(isInitiator) {
 
   if (isInitiator) {
     try {
-      const rawOffer = await peerConnection.createOffer({
+      const offer = await peerConnection.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
         voiceActivityDetection: true
       });
-      const optimizedSdp = optimizeSdp(rawOffer.sdp);
-      const offer = { type: rawOffer.type, sdp: optimizedSdp };
       await peerConnection.setLocalDescription(offer);
-      applySenderOptimizations(peerConnection);
-      sendSignal('offer', { session_id: sessionId, sdp: offer });
-      console.log('Sent WebRTC Offer with Audio & Video (Low-latency optimized)');
+      sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
+      console.log('Sent WebRTC Offer with Audio & Video');
     } catch (e) {
       console.error('Error creating offer:', e);
     }
