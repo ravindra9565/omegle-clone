@@ -1,24 +1,22 @@
-// Configuration - High Availability STUN & TURN Relay Servers for Cross-Network & Mobile 4G/5G
-const STUN_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'stun:stun.services.mozilla.com' },
-  {
-    urls: [
-      'turn:openrelay.metered.ca:80',
-      'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp',
-      'turns:openrelay.metered.ca:443?transport=tcp'
-    ],
-    username: 'openrelay',
-    credential: 'openrelay'
-  }
-];
+// Ultra-Fast WebRTC RTCConfiguration with Candidate Pre-Pooling & Bundle Policy
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443?transport=tcp'
+      ],
+      username: 'openrelay',
+      credential: 'openrelay'
+    }
+  ],
+  iceCandidatePoolSize: 10,
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require'
+};
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
 
@@ -585,7 +583,7 @@ async function handleSignalEvent(payload) {
   }
 }
 
-// 5. Setup WebRTC Peer Connection (Ultra-Fast Connection Pipeline)
+// 5. Setup WebRTC Peer Connection (Ultra-Fast Sub-Second Connection Pipeline)
 async function setupPeerConnection(isInitiator) {
   if (peerConnection) {
     try {
@@ -595,11 +593,9 @@ async function setupPeerConnection(isInitiator) {
   }
 
   const initPromise = (async () => {
-    peerConnection = new RTCPeerConnection({
-      iceServers: STUN_SERVERS
-    });
+    peerConnection = new RTCPeerConnection(RTC_CONFIG);
 
-    // Attach local audio and video tracks directly (reuses active stream for zero delay)
+    // Attach local audio and video tracks directly (reuses active stream for 0ms delay)
     const stream = await ensureMicrophoneTrack();
     if (stream) {
       stream.getTracks().forEach(track => {
@@ -744,11 +740,11 @@ async function setupPeerConnection(isInitiator) {
       const offer = await peerConnection.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
-        voiceActivityDetection: true
+        voiceActivityDetection: false
       });
       await peerConnection.setLocalDescription(offer);
       sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
-      console.log('✅ Sent WebRTC Offer with Audio & Video');
+      console.log('⚡ Sent WebRTC Offer with Audio & Video');
     } catch (e) {
       console.error('Error creating offer:', e);
     }
@@ -797,7 +793,7 @@ async function handleMatchButtonClick() {
     updateMatchUIState('searching');
     sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
   } else {
-    // Already in match loop: user clicked "Next Match" to skip
+    // Already in match loop: user clicked "Next Match" to skip instantly
     if (peerConnection) {
       try { peerConnection.close(); } catch (e) {}
       peerConnection = null;
@@ -887,19 +883,15 @@ function handleStrangerDisconnected() {
   isConnected = false;
 
   if (isAutoMatching) {
-    // Session stays active! Instantly search for the next stranger automatically
+    // Session stays active! Instantly search for the next stranger automatically with 0ms delay
     isMatching = true;
     updateMatchUIState('searching');
     matchStatusText.textContent = 'Stranger disconnected. Finding next stranger...';
     showToast('Stranger left. Finding next...');
     addMessage('Stranger has disconnected. Finding next stranger...', 'system');
 
-    clearTimeout(autoNextTimer);
-    autoNextTimer = setTimeout(() => {
-      if (isAutoMatching) {
-        sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
-      }
-    }, 200);
+    // Instant re-queue
+    sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
   } else {
     updateMatchUIState('idle');
     matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';

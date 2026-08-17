@@ -162,6 +162,9 @@ class SignalingManager:
 
     async def join_queue(self, user_id: str):
         async with self._lock:
+            # Clean dead sockets and remove self from queue
+            self.waiting_queue = [p for p in self.waiting_queue if p in self.active_sockets and p != user_id]
+
             # If already in a session, disconnect old session first
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
@@ -174,14 +177,9 @@ class SignalingManager:
                     del self.user_session_map[peer]
                 asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
-            if user_id in self.waiting_queue:
-                self.waiting_queue.remove(user_id)
-
-            # Matchmaking: Find earliest valid waiting candidate for fastest pairing
-            candidates = [p for p in self.waiting_queue if p != user_id and p in self.active_sockets]
-            if candidates:
-                peer_id = candidates[0]
-                self.waiting_queue.remove(peer_id)
+            # Matchmaking: Instant O(1) FIFO pairing with first waiting peer
+            if self.waiting_queue:
+                peer_id = self.waiting_queue.pop(0)
 
                 session_id = str(uuid.uuid4())
                 self.active_sessions[session_id] = {
