@@ -1,21 +1,23 @@
-// Ultra-Fast WebRTC RTCConfiguration with Candidate Pre-Pooling & Bundle Policy
+// High-Speed Reliable WebRTC Configuration
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443?transport=tcp'
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+        'turns:openrelay.metered.ca:443?transport=tcp'
       ],
       username: 'openrelay',
       credential: 'openrelay'
     }
-  ],
-  iceCandidatePoolSize: 10,
-  bundlePolicy: 'max-bundle',
-  rtcpMuxPolicy: 'require'
+  ]
 };
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
@@ -274,9 +276,9 @@ function updateMicIndicator(active) {
   }
 }
 
-// Ensure Camera and Microphone Tracks are Always Attached
+// Ensure Camera and Microphone Tracks are Attached
 async function ensureMicrophoneTrack() {
-  if (!localStream || localStream.getAudioTracks().length === 0 || localStream.getVideoTracks().length === 0) {
+  if (!localStream) {
     await initLocalCamera();
   }
   return localStream;
