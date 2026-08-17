@@ -95,11 +95,6 @@
       </div>
 
       <div class="badge-tag stranger-tag" id="strangerBadge" style="display: none;">STRANGER</div>
-      
-      <!-- Quick Floating Next button on Stranger Video -->
-      <button class="quick-next-btn" id="btnQuickNext" style="display: none;" title="Skip to Next Stranger (Space / Esc)">
-        <i class="fa-solid fa-forward-step"></i> Next
-      </button>
     </div>
 
     <!-- RIGHT: TEXT CHAT / INFO BOX -->
@@ -110,7 +105,7 @@
         <p class="welcome-text">
           Ready to chat with new friends worldwide? Start matching for an enjoyable and fun communication experience! 🌍 💬
         </p>
-        <button class="btn-new-chat" id="btnNewChat">Start Matching</button>
+        <button class="btn-new-chat" id="btnNewChat">New Chat</button>
       </div>
 
       <!-- Messages Stream (Shown when active) -->
@@ -127,7 +122,7 @@
 
       <!-- Chat Input Field -->
       <div class="chat-input-bar">
-        <input type="text" id="messageInput" placeholder="Type a message... (Press Enter)" disabled autocomplete="off" />
+        <input type="text" id="messageInput" placeholder="Type a message..." disabled autocomplete="off" />
         <button id="btnSendMessage" disabled>
           <i class="fa-solid fa-paper-plane"></i>
         </button>
@@ -137,22 +132,18 @@
 
   </main>
 
-  <!-- BOTTOM CONTROL BUTTONS -->
+  <!-- BOTTOM CONTROL BUTTONS (ORIGINAL CLEAN LAYOUT) -->
   <footer class="bottom-bar">
     <button class="bottom-btn btn-gender" id="btnGender">
-      <i class="fa-solid fa-venus-mars"></i> <span>Male & Female</span>
+      <i class="fa-solid fa-venus-mars"></i> Male & Female
     </button>
 
-    <button class="bottom-btn btn-stop" id="btnStopMatch" style="display: none;" title="Stop Searching (Esc)">
-      <i class="fa-solid fa-stop"></i> <span>Stop</span>
+    <button class="bottom-btn btn-preferences" id="btnPreferences">
+      <i class="fa-solid fa-sliders"></i> Preferences
     </button>
 
     <button class="bottom-btn btn-start-match" id="btnStartMatch">
-      <i class="fa-solid fa-play" id="startBtnIcon"></i> <span id="startBtnText">Start Match</span>
-    </button>
-
-    <button class="bottom-btn btn-next-match" id="btnNextMatch" style="display: none;" title="Skip Stranger (Space / Esc)">
-      <i class="fa-solid fa-forward-step"></i> <span>Next Match</span>
+      <span id="startBtnText">Start Match</span>
     </button>
   </footer>
 
