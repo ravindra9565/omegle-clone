@@ -126,6 +126,8 @@ class SignalingManager:
         self.waiting_queue: List[str] = []
         self.active_sessions: Dict[str, dict] = {}
         self.user_session_map: Dict[str, str] = {}
+        self.recent_peers: Dict[str, List[str]] = {}
+        self.user_meta: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
 
     async def connect(self, ws: WebSocket, user_id: str):
@@ -139,6 +141,8 @@ class SignalingManager:
                 del self.active_sockets[user_id]
             if user_id in self.waiting_queue:
                 self.waiting_queue.remove(user_id)
+            if user_id in self.user_meta:
+                del self.user_meta[user_id]
 
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
@@ -149,6 +153,7 @@ class SignalingManager:
                     del self.user_session_map[user_id]
                 if peer in self.user_session_map:
                     del self.user_session_map[peer]
+                self._record_recent_peer(user_id, peer)
                 asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
         logger.info(f"User disconnected: {user_id}")
@@ -160,12 +165,28 @@ class SignalingManager:
             except Exception as e:
                 logger.error(f"Failed to send to {user_id}: {e}")
 
-    async def join_queue(self, user_id: str):
+    def _record_recent_peer(self, u1: str, u2: str):
+        if u1 not in self.recent_peers:
+            self.recent_peers[u1] = []
+        self.recent_peers[u1].append(u2)
+        if len(self.recent_peers[u1]) > 10:
+            self.recent_peers[u1].pop(0)
+
+        if u2 not in self.recent_peers:
+            self.recent_peers[u2] = []
+        self.recent_peers[u2].append(u1)
+        if len(self.recent_peers[u2]) > 10:
+            self.recent_peers[u2].pop(0)
+
+    async def join_queue(self, user_id: str, payload: Optional[dict] = None):
         async with self._lock:
+            if payload:
+                self.user_meta[user_id] = payload
+
             # Clean dead sockets and remove self from queue
             self.waiting_queue = [p for p in self.waiting_queue if p in self.active_sockets and p != user_id]
 
-            # If already in a session, disconnect old session first
+            # If already in a session, disconnect old session first and record match history
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
                 sess = self.active_sessions[sess_id]
@@ -175,11 +196,23 @@ class SignalingManager:
                     del self.user_session_map[user_id]
                 if peer in self.user_session_map:
                     del self.user_session_map[peer]
+                self._record_recent_peer(user_id, peer)
                 asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
-            # Matchmaking: Instant O(1) FIFO pairing with first waiting peer
-            if self.waiting_queue:
-                peer_id = self.waiting_queue.pop(0)
+            # Matchmaking: True Random Matching across different available strangers
+            candidates = [p for p in self.waiting_queue if p != user_id and p in self.active_sockets]
+            if candidates:
+                recent_history = set(self.recent_peers.get(user_id, []))
+                # Prioritize fresh strangers who the user hasn't met recently
+                fresh_candidates = [p for p in candidates if p not in recent_history]
+
+                if fresh_candidates:
+                    peer_id = random.choice(fresh_candidates)
+                else:
+                    peer_id = random.choice(candidates)
+
+                self.waiting_queue.remove(peer_id)
+                self._record_recent_peer(user_id, peer_id)
 
                 session_id = str(uuid.uuid4())
                 self.active_sessions[session_id] = {
@@ -189,7 +222,7 @@ class SignalingManager:
                 self.user_session_map[user_id] = session_id
                 self.user_session_map[peer_id] = session_id
 
-                logger.info(f"⚡ INSTANT MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
+                logger.info(f"🎲 TRUE RANDOM MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
 
                 # Dispatch matched events concurrently for minimal latency
                 await asyncio.gather(
@@ -213,8 +246,8 @@ class SignalingManager:
             logger.info(f"User {user_id} waiting in queue. (Queue count: {len(self.waiting_queue)})")
             await self.send_to_user(user_id, {"type": "searching"})
 
-    async def handle_next(self, user_id: str, session_id: Optional[str] = None):
-        await self.join_queue(user_id)
+    async def handle_next(self, user_id: str, payload: Optional[dict] = None):
+        await self.join_queue(user_id, payload)
 
     async def leave_queue(self, user_id: str):
         async with self._lock:
@@ -229,6 +262,7 @@ class SignalingManager:
                     del self.user_session_map[user_id]
                 if peer in self.user_session_map:
                     del self.user_session_map[peer]
+                self._record_recent_peer(user_id, peer)
                 asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
         await self.send_to_user(user_id, {"type": "stopped"})
 
@@ -254,11 +288,10 @@ async def websocket_endpoint(
             payload = data.get("data", {})
 
             if event_type == "join_queue":
-                await manager.join_queue(user_id)
+                await manager.join_queue(user_id, payload)
 
             elif event_type in ("next", "skip"):
-                sess_id = payload.get("session_id")
-                await manager.handle_next(user_id, sess_id)
+                await manager.handle_next(user_id, payload)
 
             elif event_type == "stop":
                 await manager.leave_queue(user_id)
