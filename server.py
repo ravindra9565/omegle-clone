@@ -118,42 +118,7 @@ async def logout(request: Request):
 
 
 # =========================================================
-# VIRTUAL RANDOM STRANGER PROFILES & CHAT DATA
-# =========================================================
-BOT_PROFILES = [
-    {"id": "bot_1", "name": "Emma", "age": 21, "gender": "female", "country": "United States", "flag": "🇺🇸", "avatar_color": "#ec4899", "interests": ["Music", "Travel", "Movies"], "icon": "🌸"},
-    {"id": "bot_2", "name": "Lucas", "age": 23, "gender": "male", "country": "United Kingdom", "flag": "🇬🇧", "avatar_color": "#3b82f6", "interests": ["Gaming", "Coding", "Gym"], "icon": "🎸"},
-    {"id": "bot_3", "name": "Priya", "age": 22, "gender": "female", "country": "India", "flag": "🇮🇳", "avatar_color": "#f97316", "interests": ["Art", "Dance", "Photography"], "icon": "✨"},
-    {"id": "bot_4", "name": "Elena", "age": 20, "gender": "female", "country": "Spain", "flag": "🇪🇸", "avatar_color": "#a855f7", "interests": ["Fashion", "Coffee", "Yoga"], "icon": "💃"},
-    {"id": "bot_5", "name": "Aarav", "age": 24, "gender": "male", "country": "India", "flag": "🇮🇳", "avatar_color": "#10b981", "interests": ["Tech", "Cricket", "Foodie"], "icon": "🚀"},
-    {"id": "bot_6", "name": "Chloe", "age": 22, "gender": "female", "country": "Australia", "flag": "🇦🇺", "avatar_color": "#06b6d4", "interests": ["Surfing", "Animals", "Reading"], "icon": "🌺"},
-    {"id": "bot_7", "name": "Liam", "age": 25, "gender": "male", "country": "Canada", "flag": "🇨🇦", "avatar_color": "#6366f1", "interests": ["Hockey", "Hiking", "Anime"], "icon": "⚽"},
-    {"id": "bot_8", "name": "Yuki", "age": 21, "gender": "female", "country": "Japan", "flag": "🇯🇵", "avatar_color": "#f43f5e", "interests": ["Anime", "Drawing", "Matcha"], "icon": "🌸"},
-    {"id": "bot_9", "name": "Marco", "age": 24, "gender": "male", "country": "Italy", "flag": "🇮🇹", "avatar_color": "#14b8a6", "interests": ["Cooking", "Cars", "Design"], "icon": "🍕"},
-    {"id": "bot_10", "name": "Sophia", "age": 23, "gender": "female", "country": "Germany", "flag": "🇩🇪", "avatar_color": "#8b5cf6", "interests": ["Books", "Cinema", "Languages"], "icon": "🎨"},
-    {"id": "bot_11", "name": "Noah", "age": 22, "gender": "male", "country": "France", "flag": "🇫🇷", "avatar_color": "#0ea5e9", "interests": ["Architecture", "Music", "Skate"], "icon": "🛹"},
-    {"id": "bot_12", "name": "Zara", "age": 21, "gender": "female", "country": "UAE", "flag": "🇦🇪", "avatar_color": "#d946ef", "interests": ["Shopping", "Poetry", "Design"], "icon": "💎"},
-    {"id": "bot_13", "name": "Mateo", "age": 23, "gender": "male", "country": "Brazil", "flag": "🇧🇷", "avatar_color": "#eab308", "interests": ["Football", "Samba", "Fitness"], "icon": "🔥"},
-    {"id": "bot_14", "name": "Mia", "age": 20, "gender": "female", "country": "Sweden", "flag": "🇸🇪", "avatar_color": "#38bdf8", "interests": ["Nature", "Baking", "Pop Music"], "icon": "🎧"},
-    {"id": "bot_15", "name": "Rohan", "age": 24, "gender": "male", "country": "Singapore", "flag": "🇸🇬", "avatar_color": "#22c55e", "interests": ["Finance", "Badminton", "Sci-Fi"], "icon": "💻"}
-]
-
-BOT_CHAT_REPLIES = [
-    "Hey there! How's your day going? 😊",
-    "Hello! Where are you connecting from? 🌍",
-    "Hey! Cool to meet you here! ✨",
-    "Haha that's awesome! What kind of music do you like? 🎧",
-    "Nice to connect with you! Having fun? 🚀",
-    "I love traveling and trying new street food! What about you? 🍕",
-    "Haha yeah, totally agree! 😄",
-    "Omegle is so fun today! Glad we matched haha 💬",
-    "Cool! Are you working or studying right now? 📚",
-    "Awesome vibes today! Hope you have a great day ahead! 🌟"
-]
-
-
-# =========================================================
-# WEBRTC SIGNALING MANAGER
+# WEBRTC SIGNALING MANAGER (PURE REAL-PEER RANDOM MATCHING)
 # =========================================================
 class SignalingManager:
     def __init__(self):
@@ -162,8 +127,6 @@ class SignalingManager:
         self.active_sessions: Dict[str, dict] = {}
         self.user_session_map: Dict[str, str] = {}
         self.recent_peers: Dict[str, List[str]] = {}
-        self.user_meta: Dict[str, dict] = {}
-        self.bot_match_tasks: Dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
     async def connect(self, ws: WebSocket, user_id: str):
@@ -177,24 +140,18 @@ class SignalingManager:
                 del self.active_sockets[user_id]
             if user_id in self.waiting_queue:
                 self.waiting_queue.remove(user_id)
-            if user_id in self.user_meta:
-                del self.user_meta[user_id]
-            if user_id in self.bot_match_tasks:
-                self.bot_match_tasks[user_id].cancel()
-                del self.bot_match_tasks[user_id]
 
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
                 sess = self.active_sessions[sess_id]
-                peer = sess.get("user_b") if sess.get("user_a") == user_id else sess.get("user_a")
+                peer = sess["user_b"] if sess["user_a"] == user_id else sess["user_a"]
                 del self.active_sessions[sess_id]
                 if user_id in self.user_session_map:
                     del self.user_session_map[user_id]
-                if peer and peer in self.user_session_map:
+                if peer in self.user_session_map:
                     del self.user_session_map[peer]
-                if peer and not peer.startswith("bot_"):
-                    self._record_recent_peer(user_id, peer)
-                    asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
+                self._record_recent_peer(user_id, peer)
+                asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
         logger.info(f"User disconnected: {user_id}")
 
@@ -209,26 +166,17 @@ class SignalingManager:
         if u1 not in self.recent_peers:
             self.recent_peers[u1] = []
         self.recent_peers[u1].append(u2)
-        if len(self.recent_peers[u1]) > 10:
+        if len(self.recent_peers[u1]) > 5:
             self.recent_peers[u1].pop(0)
 
-        if not u2.startswith("bot_"):
-            if u2 not in self.recent_peers:
-                self.recent_peers[u2] = []
-            self.recent_peers[u2].append(u1)
-            if len(self.recent_peers[u2]) > 10:
-                self.recent_peers[u2].pop(0)
+        if u2 not in self.recent_peers:
+            self.recent_peers[u2] = []
+        self.recent_peers[u2].append(u1)
+        if len(self.recent_peers[u2]) > 5:
+            self.recent_peers[u2].pop(0)
 
     async def join_queue(self, user_id: str, payload: Optional[dict] = None):
         async with self._lock:
-            if payload:
-                self.user_meta[user_id] = payload
-
-            # Cancel existing bot match task if any
-            if user_id in self.bot_match_tasks:
-                self.bot_match_tasks[user_id].cancel()
-                del self.bot_match_tasks[user_id]
-
             # Clean dead sockets and remove self from queue
             self.waiting_queue = [p for p in self.waiting_queue if p in self.active_sockets and p != user_id]
 
@@ -236,18 +184,16 @@ class SignalingManager:
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
                 sess = self.active_sessions[sess_id]
-                peer = sess.get("user_b") if sess.get("user_a") == user_id else sess.get("user_a")
+                peer = sess["user_b"] if sess["user_a"] == user_id else sess["user_a"]
                 del self.active_sessions[sess_id]
                 if user_id in self.user_session_map:
                     del self.user_session_map[user_id]
-                if peer and peer in self.user_session_map:
+                if peer in self.user_session_map:
                     del self.user_session_map[peer]
-                if peer:
-                    self._record_recent_peer(user_id, peer)
-                    if not peer.startswith("bot_"):
-                        asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
+                self._record_recent_peer(user_id, peer)
+                asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
-            # 1. PRIORITY: Match with real human peer if available
+            # Matchmaking: True Random Matching across different available real human strangers
             candidates = [p for p in self.waiting_queue if p != user_id and p in self.active_sockets]
             if candidates:
                 recent_history = set(self.recent_peers.get(user_id, []))
@@ -264,83 +210,34 @@ class SignalingManager:
                 session_id = str(uuid.uuid4())
                 self.active_sessions[session_id] = {
                     "user_a": user_id,
-                    "user_b": peer_id,
-                    "is_bot": False
+                    "user_b": peer_id
                 }
                 self.user_session_map[user_id] = session_id
                 self.user_session_map[peer_id] = session_id
 
-                logger.info(f"👥 REAL PEER MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
+                logger.info(f"🎲 RANDOM REAL PEER MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
 
+                # Dispatch matched events concurrently for minimal latency
                 await asyncio.gather(
                     self.send_to_user(user_id, {
                         "type": "matched",
                         "session_id": session_id,
                         "role": "initiator",
-                        "is_bot": False,
                         "peer_id": peer_id
                     }),
                     self.send_to_user(peer_id, {
                         "type": "matched",
                         "session_id": session_id,
                         "role": "receiver",
-                        "is_bot": False,
                         "peer_id": user_id
                     })
                 )
                 return
 
-            # 2. No real peer available right now -> Add to queue & start fast bot fallback
+            # No peer ready right now -> Add to waiting queue
             self.waiting_queue.append(user_id)
             logger.info(f"User {user_id} waiting in queue. (Queue count: {len(self.waiting_queue)})")
             await self.send_to_user(user_id, {"type": "searching"})
-
-            # Schedule virtual stranger fallback after 400ms if no real peer joins
-            self.bot_match_tasks[user_id] = asyncio.create_task(self._match_with_virtual_bot(user_id))
-
-    async def _match_with_virtual_bot(self, user_id: str):
-        try:
-            await asyncio.sleep(0.35)  # 350ms realistic search time
-            async with self._lock:
-                if user_id not in self.waiting_queue or user_id not in self.active_sockets:
-                    return
-
-                self.waiting_queue.remove(user_id)
-
-                gender_filter = (self.user_meta.get(user_id, {}) or {}).get("gender", "any")
-                recent_bots = set(self.recent_peers.get(user_id, []))
-
-                pool = BOT_PROFILES
-                if gender_filter in ("female", "male"):
-                    pool = [b for b in pool if b["gender"] == gender_filter] or BOT_PROFILES
-
-                fresh_pool = [b for b in pool if b["id"] not in recent_bots]
-                chosen_bot = random.choice(fresh_pool if fresh_pool else pool)
-
-                session_id = str(uuid.uuid4())
-                self.active_sessions[session_id] = {
-                    "user_a": user_id,
-                    "user_b": chosen_bot["id"],
-                    "is_bot": True,
-                    "bot_profile": chosen_bot
-                }
-                self.user_session_map[user_id] = session_id
-                self._record_recent_peer(user_id, chosen_bot["id"])
-
-                logger.info(f"🤖 VIRTUAL RANDOM STRANGER MATCH: {user_id} <===> {chosen_bot['name']} ({chosen_bot['country']})")
-
-                await self.send_to_user(user_id, {
-                    "type": "matched",
-                    "session_id": session_id,
-                    "role": "receiver",
-                    "is_bot": True,
-                    "bot_profile": chosen_bot,
-                    "peer_id": chosen_bot["id"]
-                })
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error in virtual bot matching: {e}")
 
     async def handle_next(self, user_id: str, payload: Optional[dict] = None):
         await self.join_queue(user_id, payload)
@@ -349,23 +246,17 @@ class SignalingManager:
         async with self._lock:
             if user_id in self.waiting_queue:
                 self.waiting_queue.remove(user_id)
-            if user_id in self.bot_match_tasks:
-                self.bot_match_tasks[user_id].cancel()
-                del self.bot_match_tasks[user_id]
-
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
                 sess = self.active_sessions[sess_id]
-                peer = sess.get("user_b") if sess.get("user_a") == user_id else sess.get("user_a")
+                peer = sess["user_b"] if sess["user_a"] == user_id else sess["user_a"]
                 del self.active_sessions[sess_id]
                 if user_id in self.user_session_map:
                     del self.user_session_map[user_id]
-                if peer and peer in self.user_session_map:
+                if peer in self.user_session_map:
                     del self.user_session_map[peer]
-                if peer:
-                    self._record_recent_peer(user_id, peer)
-                    if not peer.startswith("bot_"):
-                        asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
+                self._record_recent_peer(user_id, peer)
+                asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
         await self.send_to_user(user_id, {"type": "stopped"})
 
 
@@ -398,67 +289,27 @@ async def websocket_endpoint(
             elif event_type == "stop":
                 await manager.leave_queue(user_id)
 
-            elif event_type == "message":
+            elif event_type in ("offer", "answer", "ice_candidate", "message", "typing"):
                 sess_id = payload.get("session_id") or manager.user_session_map.get(user_id)
                 if sess_id and sess_id in manager.active_sessions:
                     sess = manager.active_sessions[sess_id]
-                    is_bot = sess.get("is_bot", False)
+                    peer = sess["user_b"] if sess["user_a"] == user_id else sess["user_a"]
 
                     msg_out = {
-                        "type": "message",
+                        "type": event_type,
                         "session_id": sess_id,
                         "sender_id": user_id,
                         **payload
                     }
-                    await manager.send_to_user(user_id, msg_out)
-
-                    if not is_bot:
-                        peer = sess.get("user_b") if sess.get("user_a") == user_id else sess.get("user_a")
-                        if peer:
-                            await manager.send_to_user(peer, msg_out)
-                    else:
-                        # Simulated Bot Interactive Reply
-                        asyncio.create_task(_send_bot_reply(user_id, sess_id))
-
-            elif event_type in ("offer", "answer", "ice_candidate", "typing"):
-                sess_id = payload.get("session_id") or manager.user_session_map.get(user_id)
-                if sess_id and sess_id in manager.active_sessions:
-                    sess = manager.active_sessions[sess_id]
-                    if not sess.get("is_bot", False):
-                        peer = sess.get("user_b") if sess.get("user_a") == user_id else sess.get("user_a")
-                        if peer:
-                            msg_out = {
-                                "type": event_type,
-                                "session_id": sess_id,
-                                "sender_id": user_id,
-                                **payload
-                            }
-                            await manager.send_to_user(peer, msg_out)
+                    await manager.send_to_user(peer, msg_out)
+                    if event_type == "message":
+                        await manager.send_to_user(user_id, msg_out)
 
     except WebSocketDisconnect:
         await manager.disconnect(user_id)
     except Exception as e:
         logger.error(f"WebSocket error for {user_id}: {e}")
         await manager.disconnect(user_id)
-
-
-async def _send_bot_reply(user_id: str, session_id: str):
-    try:
-        await asyncio.sleep(0.5)
-        await manager.send_to_user(user_id, {"type": "typing", "is_typing": True})
-        await asyncio.sleep(1.2)
-        await manager.send_to_user(user_id, {"type": "typing", "is_typing": False})
-
-        reply_text = random.choice(BOT_CHAT_REPLIES)
-        await manager.send_to_user(user_id, {
-            "type": "message",
-            "session_id": session_id,
-            "sender_id": "bot_stranger",
-            "text": reply_text,
-            "timestamp": "now"
-        })
-    except Exception as e:
-        logger.error(f"Error sending bot reply: {e}")
 
     except WebSocketDisconnect:
         await manager.disconnect(user_id)
