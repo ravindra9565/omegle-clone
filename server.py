@@ -302,6 +302,57 @@ async def serve_js():
 # =========================================================
 # SERVER ENTRYPOINT
 # =========================================================
+def get_local_ip() -> str:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
 if __name__ == "__main__":
+    import sys
     port = int(os.environ.get("PORT", 3000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    local_ip = get_local_ip()
+    
+    use_ssl = (
+        "--ssl" in sys.argv 
+        or os.environ.get("SSL", "").lower() in ("1", "true", "yes")
+    )
+    
+    cert_file = os.path.join(BASE_DIR, "cert.pem")
+    key_file = os.path.join(BASE_DIR, "key.pem")
+    
+    has_cert = os.path.exists(cert_file) and os.path.exists(key_file)
+    
+    if use_ssl and has_cert:
+        proto = "https"
+        print(f"\n========================================================")
+        print(f"🔒 GlobChat Server running with HTTPS / WSS:")
+        print(f"👉 Local:   https://localhost:{port}")
+        print(f"👉 Phone:   https://{local_ip}:{port}")
+        print(f"========================================================\n")
+        uvicorn.run(
+            "server:app",
+            host="0.0.0.0",
+            port=port,
+            ssl_certfile=cert_file,
+            ssl_keyfile=key_file,
+            reload=False
+        )
+    else:
+        proto = "http"
+        print(f"\n========================================================")
+        print(f"🚀 GlobChat Server running:")
+        print(f"👉 Local:   http://localhost:{port}")
+        print(f"👉 Phone:   http://{local_ip}:{port}")
+        if has_cert:
+            print(f"💡 To run with HTTPS for mobile camera: python server.py --ssl")
+        print(f"💡 For public internet access, use: npx untun tunnel http://localhost:{port}")
+        print(f"========================================================\n")
+        uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+

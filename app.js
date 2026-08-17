@@ -1,4 +1,4 @@
-// Configuration - High Availability STUN & TURN Relay Servers
+// Configuration - High Availability STUN & TURN Relay Servers for Cross-Network & Mobile 4G/5G
 const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -7,33 +7,18 @@ const STUN_SERVERS = [
   { urls: 'stun:stun4.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
   { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.services.mozilla.com' },
   {
     urls: [
       'turn:openrelay.metered.ca:80',
       'turn:openrelay.metered.ca:443',
-      'turn:openrelay.metered.ca:443?transport=tcp'
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp'
     ],
     username: 'openrelay',
     credential: 'openrelay'
   }
 ];
-
-const AUDIO_CONSTRAINTS = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-  channelCount: 1,
-  sampleRate: 48000,
-  sampleSize: 16,
-  latency: 0.005
-};
-
-const VIDEO_CONSTRAINTS = {
-  width: { ideal: 640, max: 1280 },
-  height: { ideal: 480, max: 720 },
-  frameRate: { ideal: 30, min: 24, max: 30 },
-  facingMode: 'user'
-};
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
 
@@ -50,7 +35,6 @@ let isConnected = false;
 let isMuted = false;
 let isCamOff = false;
 let pendingCandidates = [];
-let frameStreamTimer = null;
 let audioCtx = null;
 
 // DOM Elements
@@ -101,27 +85,30 @@ const authTabs = document.querySelectorAll('.auth-tab');
 let currentUser = null;
 let authMode = 'login';
 
-// Hidden canvas for frame capture fallback
-const captureCanvas = document.createElement('canvas');
-const captureCtx = captureCanvas.getContext('2d');
-captureCanvas.width = 360;
-captureCanvas.height = 270;
-
 async function fetchOnlineUsers() {
   try {
     const response = await fetch('/api/online');
     const data = await response.json();
     const count = Number(data?.online || 0);
-    onlineCount.textContent = count.toLocaleString();
+    if (onlineCount) onlineCount.textContent = count.toLocaleString();
   } catch (err) {
-    onlineCount.textContent = '0';
+    if (onlineCount) onlineCount.textContent = '0';
   }
 }
 
 setInterval(fetchOnlineUsers, 10000);
 fetchOnlineUsers();
 
-// Fallback animated stream if camera is busy
+// Insecure context warning for mobile browsers on HTTP
+function checkSecureContext() {
+  const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!window.isSecureContext && !isLocalhost) {
+    console.warn('⚠️ Insecure Context: Mobile browsers block camera/mic over HTTP on LAN IPs.');
+    showToast('⚠️ Mobile Notice: Camera/Mic requires HTTPS or a secure tunnel (e.g. Cloudflare/Untun).');
+  }
+}
+
+// Fallback animated stream if camera is busy or denied
 function createFallbackVideoStream() {
   const canvas = document.createElement('canvas');
   canvas.width = 640;
@@ -147,7 +134,7 @@ function createFallbackVideoStream() {
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = 'bold 18px Inter, sans-serif';
-    ctx.fillText('Live Camera', 320, 310);
+    ctx.fillText('Live User', 320, 310);
     ctx.font = '14px Inter, sans-serif';
     ctx.fillText(new Date().toLocaleTimeString(), 320, 340);
 
@@ -170,77 +157,74 @@ function applyAudioTrackSettings(track) {
   track.applyConstraints(constraints).catch(() => {});
 }
 
-// 1. Initialize Local Camera and Microphone
+// 1. Initialize Local Camera and Microphone (Robust Step-by-Step Mobile Fallback)
 async function initLocalCamera() {
-  if (localStream && localStream.getAudioTracks().length > 0 && localStream.getVideoTracks().length > 0) {
-    return localStream;
+  if (localStream && localStream.getTracks().length > 0) {
+    const hasLiveVideo = localStream.getVideoTracks().some(t => t.readyState === 'live');
+    if (hasLiveVideo) return localStream;
   }
   
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({
-        video: VIDEO_CONSTRAINTS,
-        audio: AUDIO_CONSTRAINTS
+    const attemptConfigs = [
+      { video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: { echoCancellation: true, noiseSuppression: true } },
+      { video: { facingMode: 'user' }, audio: true },
+      { video: true, audio: true },
+      { video: true, audio: false }
+    ];
+
+    for (const config of attemptConfigs) {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia(config);
+        if (localStream) {
+          console.log('✅ Camera acquired successfully with config:', config);
+          break;
+        }
+      } catch (err) {
+        console.warn('getUserMedia attempt failed for config:', config, err.name, err.message);
+      }
+    }
+
+    // If audio is missing, try adding audio separately
+    if (localStream && localStream.getAudioTracks().length === 0) {
+      try {
+        const audioOnlyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioOnlyStream.getAudioTracks().forEach(t => localStream.addTrack(t));
+      } catch (ea) {
+        console.warn('Audio-only fallback failed:', ea);
+      }
+    }
+
+    if (localStream && localStream.getVideoTracks().length > 0) {
+      localStream.getVideoTracks().forEach(track => {
+        track.enabled = !isCamOff;
       });
       localStream.getAudioTracks().forEach(track => {
-        track.enabled = true;
+        track.enabled = !isMuted;
         applyAudioTrackSettings(track);
       });
+
       localVideo.srcObject = localStream;
-      localVideo.muted = true; // Local preview is muted
+      localVideo.muted = true; // Local preview is always muted to prevent self-echo
       localVideo.playsInline = true;
-      localVideo.play().catch(() => {});
-      localOverlay.style.display = 'none';
-      updateMicIndicator(true);
+      localVideo.setAttribute('playsinline', '');
+      localVideo.setAttribute('webkit-playsinline', '');
+      localVideo.play().catch(e => console.warn('localVideo play:', e));
+      if (localOverlay) localOverlay.style.display = 'none';
+      updateMicIndicator(localStream.getAudioTracks().length > 0 && !isMuted);
       return localStream;
-    } catch (e1) {
-      console.warn('Combined getUserMedia failed, trying individual calls:', e1);
-      
-      let videoStream = null;
-      let audioStream = null;
-
-      try {
-        videoStream = await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS });
-      } catch (ev) {
-        console.warn('Video only failed:', ev);
-      }
-
-      try {
-        audioStream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
-      } catch (ea) {
-        console.warn('Audio only failed:', ea);
-      }
-
-      if (videoStream && audioStream) {
-        localStream = new MediaStream([...videoStream.getVideoTracks(), ...audioStream.getAudioTracks()]);
-      } else if (videoStream) {
-        localStream = videoStream;
-      } else if (audioStream) {
-        localStream = audioStream;
-      }
-
-      if (localStream) {
-        localStream.getAudioTracks().forEach(track => {
-          track.enabled = true;
-          applyAudioTrackSettings(track);
-        });
-        localVideo.srcObject = localStream;
-        localVideo.muted = true;
-        localVideo.playsInline = true;
-        localVideo.play().catch(() => {});
-        localOverlay.style.display = 'none';
-        updateMicIndicator(localStream.getAudioTracks().length > 0);
-        return localStream;
-      }
     }
   }
 
+  // Fallback stream if camera is busy, denied or unsupported on plain HTTP
+  console.warn('Falling back to animated canvas video stream.');
   localStream = createFallbackVideoStream();
   localVideo.srcObject = localStream;
   localVideo.muted = true;
   localVideo.playsInline = true;
+  localVideo.setAttribute('playsinline', '');
+  localVideo.setAttribute('webkit-playsinline', '');
   localVideo.play().catch(() => {});
-  localOverlay.style.display = 'none';
+  if (localOverlay) localOverlay.style.display = 'none';
   updateMicIndicator(false);
   return localStream;
 }
@@ -447,7 +431,8 @@ async function handleLogout() {
 
 // 4. Safe ICE Candidate Queue & Drainage
 async function addIceCandidateSafely(candidate) {
-  if (!candidate) return;
+  if (!candidate || (!candidate.candidate && typeof candidate !== 'string')) return;
+  
   if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
     try {
       await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
@@ -467,7 +452,9 @@ async function drainPendingIceCandidates() {
   while (pendingCandidates.length > 0) {
     const cand = pendingCandidates.shift();
     try {
-      await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+      if (cand && (cand.candidate || typeof cand === 'string')) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+      }
     } catch (e) {
       console.warn('Error applying queued ICE candidate:', e);
     }
@@ -487,9 +474,9 @@ async function handleSignalEvent(payload) {
       matchStatusText.textContent = 'Searching for a stranger...';
       startBtnText.textContent = 'Searching...';
       btnStartMatch.className = 'bottom-btn btn-start-match matching';
-      strangerPlaceholder.style.display = 'flex';
-      strangerBadge.style.display = 'none';
-      remoteVideo.style.display = 'none';
+      if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
+      if (strangerBadge) strangerBadge.style.display = 'none';
+      if (remoteVideo) remoteVideo.style.display = 'none';
       messageInput.disabled = true;
       btnSendMessage.disabled = true;
       break;
@@ -508,15 +495,15 @@ async function handleSignalEvent(payload) {
       btnSendMessage.disabled = false;
       messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
 
-      strangerPlaceholder.style.display = 'flex';
-      strangerBadge.style.display = 'none';
-      remoteVideo.style.display = 'none';
+      if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
+      if (strangerBadge) strangerBadge.style.display = 'none';
+      if (remoteVideo) remoteVideo.style.display = 'none';
 
       await setupPeerConnection(role === 'initiator');
       break;
 
     case 'offer':
-      console.log('Received WebRTC Offer, setting up answer...');
+      console.log('Received WebRTC Offer, preparing answer...');
       sessionId = session_id || sessionId;
       if (peerConnectionInitPromise) {
         await peerConnectionInitPromise;
@@ -533,7 +520,7 @@ async function handleSignalEvent(payload) {
         });
         await peerConnection.setLocalDescription(answer);
         sendSignal('answer', { session_id: sessionId, sdp: { type: answer.type, sdp: answer.sdp } });
-        console.log('Sent WebRTC Answer with Audio & Video');
+        console.log('✅ Sent WebRTC Answer with Audio & Video');
       } catch (e) {
         console.error('Error handling offer:', e);
       }
@@ -545,7 +532,7 @@ async function handleSignalEvent(payload) {
         try {
           await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
           await drainPendingIceCandidates();
-          console.log('WebRTC audio & video connected stably.');
+          console.log('✅ WebRTC peer connection established stably.');
         } catch (e) {
           console.error('Error handling answer:', e);
         }
@@ -592,7 +579,7 @@ async function setupPeerConnection(isInitiator) {
     if (stream) {
       stream.getTracks().forEach(track => {
         try {
-          track.enabled = true;
+          track.enabled = (track.kind === 'video') ? !isCamOff : !isMuted;
           if (track.kind === 'audio') {
             applyAudioTrackSettings(track);
           }
@@ -614,45 +601,72 @@ async function setupPeerConnection(isInitiator) {
       if (!hasVideo) peerConnection.addTransceiver('video', { direction: 'recvonly' });
     } catch (e) {}
 
-    // Native ontrack: Attach stream to remoteVideo & remoteAudio with unmuted audio playback
+    // Native ontrack: Attach stream to remoteVideo & remoteAudio with automatic play fallback
     peerConnection.ontrack = (event) => {
-      console.log('🎥 WebRTC Track received:', event.track.kind, event.track.id);
-      
-      if (!remoteStream) {
-        remoteStream = new MediaStream();
-      }
-      
-      if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
-        remoteStream.addTrack(event.track);
-      }
+      console.log('🎥 WebRTC Track received:', event.track.kind, 'Track ID:', event.track.id);
 
-      if (event.streams && event.streams[0]) {
-        event.streams[0].getTracks().forEach(t => {
-          if (!remoteStream.getTracks().some(existing => existing.id === t.id)) {
-            remoteStream.addTrack(t);
-          }
-        });
+      let incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+      if (!incomingStream) {
+        if (!remoteStream) {
+          remoteStream = new MediaStream();
+        }
+        if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+          remoteStream.addTrack(event.track);
+        }
+        incomingStream = remoteStream;
+      } else {
+        remoteStream = incomingStream;
       }
 
       if (remoteVideo) {
-        remoteVideo.srcObject = remoteStream;
+        if (remoteVideo.srcObject !== incomingStream) {
+          remoteVideo.srcObject = incomingStream;
+        }
         remoteVideo.playsInline = true;
-        remoteVideo.autoplay = true;
+        remoteVideo.setAttribute('playsinline', '');
+        remoteVideo.setAttribute('webkit-playsinline', '');
         remoteVideo.style.display = 'block';
         remoteVideo.style.zIndex = '5';
-        remoteVideo.play().catch(e => {
-          console.warn('remoteVideo play:', e);
-        });
+
+        const startPlayback = () => {
+          const playPromise = remoteVideo.play();
+          if (playPromise !== undefined) {
+            playPromise.then(() => {
+              if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+              if (strangerBadge) strangerBadge.style.display = 'block';
+              if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+            }).catch(err => {
+              console.warn('remoteVideo unmuted play failed, trying muted:', err);
+              remoteVideo.muted = true;
+              remoteVideo.play().then(() => {
+                if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+                if (strangerBadge) strangerBadge.style.display = 'block';
+              }).catch(() => {});
+            });
+          }
+        };
+
+        startPlayback();
+        remoteVideo.onloadedmetadata = () => {
+          startPlayback();
+        };
       }
 
       if (remoteAudio) {
-        remoteAudio.srcObject = remoteStream;
+        if (remoteAudio.srcObject !== incomingStream) {
+          remoteAudio.srcObject = incomingStream;
+        }
         remoteAudio.playsInline = true;
-        remoteAudio.autoplay = true;
-        remoteAudio.play().catch(e => {
-          console.warn('remoteAudio play:', e);
-        });
+        remoteAudio.play().catch(e => console.warn('remoteAudio play:', e));
       }
+
+      event.track.onunmute = () => {
+        console.log(`📡 Track unmuted: ${event.track.kind}`);
+        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        if (strangerBadge) strangerBadge.style.display = 'block';
+        if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+        if (remoteVideo) remoteVideo.style.display = 'block';
+      };
 
       if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
       if (strangerBadge) strangerBadge.style.display = 'block';
@@ -662,12 +676,10 @@ async function setupPeerConnection(isInitiator) {
     peerConnection.onconnectionstatechange = () => {
       console.log('🔗 WebRTC Connection State:', peerConnection.connectionState);
       if (peerConnection.connectionState === 'connected') {
-        if (remoteStream && remoteStream.getVideoTracks().length > 0) {
-          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-          if (remoteVideo) remoteVideo.style.display = 'block';
-          if (strangerBadge) strangerBadge.style.display = 'block';
-        }
-        matchStatusText.textContent = 'Live Connected!';
+        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        if (remoteVideo) remoteVideo.style.display = 'block';
+        if (strangerBadge) strangerBadge.style.display = 'block';
+        if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
       } else if (peerConnection.connectionState === 'failed') {
         console.warn('WebRTC connection failed, attempting ICE restart...');
         try { peerConnection.restartIce(); } catch (e) {}
@@ -677,17 +689,22 @@ async function setupPeerConnection(isInitiator) {
     peerConnection.oniceconnectionstatechange = () => {
       console.log('❄️ ICE Connection State:', peerConnection.iceConnectionState);
       if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-        if (remoteStream && remoteStream.getVideoTracks().length > 0) {
-          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-          if (remoteVideo) remoteVideo.style.display = 'block';
-          if (strangerBadge) strangerBadge.style.display = 'block';
-        }
+        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+        if (remoteVideo) remoteVideo.style.display = 'block';
+        if (strangerBadge) strangerBadge.style.display = 'block';
       }
     };
 
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && sessionId) {
-        sendSignal('ice_candidate', { session_id: sessionId, candidate: event.candidate.toJSON() });
+        const candData = event.candidate.toJSON ? event.candidate.toJSON() : {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex
+        };
+        if (candData && candData.candidate) {
+          sendSignal('ice_candidate', { session_id: sessionId, candidate: candData });
+        }
       }
     };
 
@@ -706,7 +723,7 @@ async function setupPeerConnection(isInitiator) {
       });
       await peerConnection.setLocalDescription(offer);
       sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
-      console.log('Sent WebRTC Offer with Audio & Video');
+      console.log('✅ Sent WebRTC Offer with Audio & Video');
     } catch (e) {
       console.error('Error creating offer:', e);
     }
@@ -746,7 +763,6 @@ btnStartMatch.addEventListener('click', async () => {
   unlockAudio();
   await ensureMicrophoneTrack();
 
-
   if (!isConnected && !isMatching) {
     sendSignal('join_queue', { chat_type: 'video' });
     isMatching = true;
@@ -754,7 +770,6 @@ btnStartMatch.addEventListener('click', async () => {
     btnStartMatch.className = 'bottom-btn btn-start-match matching';
     matchStatusText.textContent = 'Searching for a stranger...';
   } else {
-    stopFrameStreaming();
     if (peerConnection) {
       peerConnection.close();
       peerConnection = null;
@@ -833,16 +848,14 @@ if (btnToggleCam) {
   });
 }
 
-// Unlock audio on click or touch
-['click', 'touchstart'].forEach(evt => {
+// Unlock audio and video playback on user touch/click gesture
+['click', 'touchstart', 'touchend', 'pointerdown'].forEach(evt => {
   document.addEventListener(evt, () => {
     unlockAudio();
-  });
+  }, { passive: true });
 });
 
-
 function handleStrangerDisconnected() {
-  stopFrameStreaming();
   isConnected = false;
   isMatching = false;
   remoteStream = null;
@@ -861,8 +874,6 @@ function handleStrangerDisconnected() {
   btnSendMessage.disabled = true;
   addMessage('Stranger has disconnected.', 'system');
 }
-
-
 
 const btnGender = document.getElementById('btnGender');
 let genderMode = 'any';
@@ -927,8 +938,10 @@ authModal.addEventListener('click', (event) => {
 
 // Init on Load
 window.addEventListener('DOMContentLoaded', () => {
+  checkSecureContext();
   initLocalCamera();
   connectWebSocket();
   loadCurrentUser();
   setAuthMode('login');
 });
+
