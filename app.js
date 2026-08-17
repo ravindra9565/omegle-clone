@@ -495,12 +495,121 @@ async function drainPendingIceCandidates() {
   }
 }
 
+let botStreamAnimationId = null;
+
+function stopBotVideoStream() {
+  if (botStreamAnimationId) {
+    cancelAnimationFrame(botStreamAnimationId);
+    botStreamAnimationId = null;
+  }
+}
+
+function startBotVideoStream(profile) {
+  stopBotVideoStream();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 480;
+  const ctx = canvas.getContext('2d');
+
+  let frame = 0;
+  const color = profile.avatar_color || '#3b82f6';
+  const name = profile.name || 'Stranger';
+  const flag = profile.flag || '🌍';
+  const country = profile.country || 'Global';
+  const icon = profile.icon || '👤';
+
+  function draw() {
+    frame++;
+    // Dark sleek background
+    ctx.fillStyle = '#080d1a';
+    ctx.fillRect(0, 0, 640, 480);
+
+    // Subtle background mesh glow
+    const glowRad = 180 + Math.sin(frame * 0.04) * 20;
+    const grad = ctx.createRadialGradient(320, 200, 20, 320, 200, glowRad);
+    grad.addColorStop(0, color + '44');
+    grad.addColorStop(1, '#080d1a00');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 640, 480);
+
+    // Dynamic audio equalizer waves at bottom
+    ctx.fillStyle = color + '77';
+    for (let i = 0; i < 24; i++) {
+      const barH = 8 + Math.abs(Math.sin(frame * 0.08 + i * 0.35)) * 32;
+      ctx.fillRect(155 + i * 14, 430 - barH, 8, barH);
+    }
+
+    // Avatar Outer Aura Ring
+    const ringRad = 74 + Math.sin(frame * 0.06) * 5;
+    ctx.beginPath();
+    ctx.arc(320, 195, ringRad + 8, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = color;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Avatar Inner Body
+    ctx.beginPath();
+    ctx.arc(320, 195, ringRad, 0, Math.PI * 2);
+    ctx.fillStyle = '#111827';
+    ctx.fill();
+
+    // Emoji / Icon
+    ctx.font = '50px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(icon, 320, 193);
+
+    // Live Online Green Dot
+    ctx.fillStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.arc(370, 145, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Stranger Profile Info Tag
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 22px Inter, sans-serif';
+    ctx.fillText(`${flag} ${name}, ${profile.age}`, 320, 305);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '14px Inter, sans-serif';
+    ctx.fillText(`${country} • Live Video`, 320, 335);
+
+    // Top HUD
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+    ctx.fillRect(20, 20, 150, 28);
+    ctx.fillStyle = '#22c55e';
+    ctx.font = 'bold 12px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('🟢 LIVE • 30 FPS', 32, 38);
+
+    botStreamAnimationId = requestAnimationFrame(draw);
+  }
+  draw();
+
+  const stream = canvas.captureStream(30);
+  remoteStream = stream;
+
+  if (remoteVideo) {
+    remoteVideo.srcObject = stream;
+    remoteVideo.style.display = 'block';
+    remoteVideo.playsInline = true;
+    remoteVideo.setAttribute('playsinline', '');
+    remoteVideo.play().catch(() => {});
+  }
+  if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+}
+
 // 3. Handle Signaling Events
 async function handleSignalEvent(payload) {
   const { type, session_id, role, sdp, candidate, text, is_typing, peer_id } = payload;
 
   switch (type) {
     case 'searching':
+      stopBotVideoStream();
       isMatching = true;
       isConnected = false;
       remoteStream = null;
@@ -509,6 +618,7 @@ async function handleSignalEvent(payload) {
       break;
 
     case 'matched':
+      stopBotVideoStream();
       sessionId = session_id;
       peerId = peer_id;
       isMatching = false;
@@ -516,9 +626,27 @@ async function handleSignalEvent(payload) {
       remoteStream = null;
       pendingCandidates = [];
       updateMatchUIState('connected');
-      messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
 
-      await setupPeerConnection(role === 'initiator');
+      const isBot = !!payload.is_bot;
+      const botProfile = payload.bot_profile;
+
+      if (isBot && botProfile) {
+        if (strangerBadge) {
+          strangerBadge.innerHTML = `<span>${botProfile.flag} ${botProfile.name}, ${botProfile.age}</span>`;
+          strangerBadge.style.display = 'block';
+        }
+        messagesContainer.innerHTML = `<div class="message system-msg"><span>Connected to ${botProfile.flag} ${botProfile.name} from ${botProfile.country}! Say Hi!</span></div>`;
+        if (matchStatusText) matchStatusText.textContent = `Connected with ${botProfile.name} (${botProfile.country})`;
+        startBotVideoStream(botProfile);
+      } else {
+        if (strangerBadge) {
+          strangerBadge.innerHTML = '<span>STRANGER</span>';
+          strangerBadge.style.display = 'block';
+        }
+        messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
+        if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+        await setupPeerConnection(role === 'initiator');
+      }
       break;
 
     case 'offer':
@@ -573,11 +701,13 @@ async function handleSignalEvent(payload) {
       break;
 
     case 'stopped':
+      stopBotVideoStream();
       updateMatchUIState('idle');
       break;
 
     case 'peer_disconnected':
     case 'chat_ended':
+      stopBotVideoStream();
       handleStrangerDisconnected();
       break;
   }
@@ -782,6 +912,7 @@ function unlockAudio() {
 // 6. Matchmaking Action (Single Button: Start Match -> Next Match)
 async function handleMatchButtonClick() {
   unlockAudio();
+  stopBotVideoStream();
   await ensureMicrophoneTrack();
   clearTimeout(autoNextTimer);
 
@@ -874,6 +1005,7 @@ if (btnToggleCam) {
 
 // Automatic reconnection when stranger leaves
 function handleStrangerDisconnected() {
+  stopBotVideoStream();
   if (peerConnection) {
     try { peerConnection.close(); } catch (e) {}
     peerConnection = null;
