@@ -32,10 +32,12 @@ let sessionId = null;
 let peerId = null;
 let isMatching = false;
 let isConnected = false;
+let isAutoMatching = false; // Keep continuous auto-matching active
 let isMuted = false;
 let isCamOff = false;
 let pendingCandidates = [];
 let audioCtx = null;
+let autoNextTimer = null;
 
 // DOM Elements
 const localVideo = document.getElementById('localVideo');
@@ -52,6 +54,10 @@ const micStatusIndicator = document.getElementById('micStatusIndicator');
 
 const btnStartMatch = document.getElementById('btnStartMatch');
 const startBtnText = document.getElementById('startBtnText');
+const startBtnIcon = document.getElementById('startBtnIcon');
+const btnStopMatch = document.getElementById('btnStopMatch');
+const btnNextMatch = document.getElementById('btnNextMatch');
+const btnQuickNext = document.getElementById('btnQuickNext');
 const btnNewChat = document.getElementById('btnNewChat');
 const btnToggleMic = document.getElementById('btnToggleMic');
 const btnToggleCam = document.getElementById('btnToggleCam');
@@ -84,6 +90,56 @@ const authTabs = document.querySelectorAll('.auth-tab');
 
 let currentUser = null;
 let authMode = 'login';
+
+// Matchmaking UI State Manager
+function updateMatchUIState(state) {
+  if (state === 'searching') {
+    if (btnStartMatch) btnStartMatch.style.display = 'none';
+    if (btnStopMatch) btnStopMatch.style.display = 'flex';
+    if (btnNextMatch) {
+      btnNextMatch.style.display = 'flex';
+      btnNextMatch.innerHTML = '<i class="fa-solid fa-forward-step"></i> <span>Searching...</span>';
+    }
+    if (btnQuickNext) btnQuickNext.style.display = 'none';
+    if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
+    if (strangerBadge) strangerBadge.style.display = 'none';
+    if (remoteVideo) remoteVideo.style.display = 'none';
+    if (messageInput) messageInput.disabled = true;
+    if (btnSendMessage) btnSendMessage.disabled = true;
+    if (matchStatusText) matchStatusText.textContent = 'Searching for a stranger...';
+  } else if (state === 'connected') {
+    if (btnStartMatch) btnStartMatch.style.display = 'none';
+    if (btnStopMatch) btnStopMatch.style.display = 'flex';
+    if (btnNextMatch) {
+      btnNextMatch.style.display = 'flex';
+      btnNextMatch.innerHTML = '<i class="fa-solid fa-forward-step"></i> <span>Next Match</span>';
+    }
+    if (btnQuickNext) btnQuickNext.style.display = 'flex';
+    if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+    if (strangerBadge) strangerBadge.style.display = 'block';
+    if (remoteVideo) remoteVideo.style.display = 'block';
+    if (messageInput) messageInput.disabled = false;
+    if (btnSendMessage) btnSendMessage.disabled = false;
+    if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+  } else {
+    // idle / stopped
+    if (btnStartMatch) {
+      btnStartMatch.style.display = 'flex';
+      btnStartMatch.className = 'bottom-btn btn-start-match';
+      if (startBtnText) startBtnText.textContent = 'Start Match';
+      if (startBtnIcon) startBtnIcon.className = 'fa-solid fa-play';
+    }
+    if (btnStopMatch) btnStopMatch.style.display = 'none';
+    if (btnNextMatch) btnNextMatch.style.display = 'none';
+    if (btnQuickNext) btnQuickNext.style.display = 'none';
+    if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
+    if (strangerBadge) strangerBadge.style.display = 'none';
+    if (remoteVideo) remoteVideo.style.display = 'none';
+    if (messageInput) messageInput.disabled = true;
+    if (btnSendMessage) btnSendMessage.disabled = true;
+    if (matchStatusText) matchStatusText.textContent = 'Click "Start Match" to meet someone!';
+  }
+}
 
 async function fetchOnlineUsers() {
   try {
@@ -282,6 +338,7 @@ function connectWebSocket() {
 
 function showToast(message) {
   const container = document.getElementById('toastContainer');
+  if (!container) return;
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.textContent = message;
@@ -325,9 +382,9 @@ function setAuthMode(mode) {
   authTabs.forEach(tab => {
     tab.classList.toggle('active', tab.dataset.authTab === mode);
   });
-  nameField.style.display = isSignup ? 'flex' : 'none';
-  authSubmitBtn.textContent = isSignup ? 'Create Account' : 'Login';
-  authStatus.textContent = '';
+  if (nameField) nameField.style.display = isSignup ? 'flex' : 'none';
+  if (authSubmitBtn) authSubmitBtn.textContent = isSignup ? 'Create Account' : 'Login';
+  if (authStatus) authStatus.textContent = '';
 }
 
 function renderProfile(user) {
@@ -378,7 +435,7 @@ function openAuthModal() {
 
 function closeAuthModal() {
   authModal.style.display = 'none';
-  authStatus.textContent = '';
+  if (authStatus) authStatus.textContent = '';
 }
 
 async function handleAuthSubmit(event) {
@@ -471,14 +528,7 @@ async function handleSignalEvent(payload) {
       isConnected = false;
       remoteStream = null;
       pendingCandidates = [];
-      matchStatusText.textContent = 'Searching for a stranger...';
-      startBtnText.textContent = 'Searching...';
-      btnStartMatch.className = 'bottom-btn btn-start-match matching';
-      if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
-      if (strangerBadge) strangerBadge.style.display = 'none';
-      if (remoteVideo) remoteVideo.style.display = 'none';
-      messageInput.disabled = true;
-      btnSendMessage.disabled = true;
+      updateMatchUIState('searching');
       break;
 
     case 'matched':
@@ -488,16 +538,8 @@ async function handleSignalEvent(payload) {
       isConnected = true;
       remoteStream = null;
       pendingCandidates = [];
-      matchStatusText.textContent = 'Connecting with stranger...';
-      startBtnText.textContent = 'Next Match';
-      btnStartMatch.className = 'bottom-btn btn-start-match connected';
-      messageInput.disabled = false;
-      btnSendMessage.disabled = false;
+      updateMatchUIState('connected');
       messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
-
-      if (strangerPlaceholder) strangerPlaceholder.style.display = 'flex';
-      if (strangerBadge) strangerBadge.style.display = 'none';
-      if (remoteVideo) remoteVideo.style.display = 'none';
 
       await setupPeerConnection(role === 'initiator');
       break;
@@ -553,6 +595,10 @@ async function handleSignalEvent(payload) {
       typingIndicator.style.display = is_typing ? 'block' : 'none';
       break;
 
+    case 'stopped':
+      updateMatchUIState('idle');
+      break;
+
     case 'peer_disconnected':
     case 'chat_ended':
       handleStrangerDisconnected();
@@ -560,7 +606,7 @@ async function handleSignalEvent(payload) {
   }
 }
 
-// 5. Setup WebRTC Peer Connection
+// 5. Setup WebRTC Peer Connection (Ultra-Fast Connection Pipeline)
 async function setupPeerConnection(isInitiator) {
   if (peerConnection) {
     try {
@@ -574,7 +620,7 @@ async function setupPeerConnection(isInitiator) {
       iceServers: STUN_SERVERS
     });
 
-    // Attach local audio and video tracks directly
+    // Attach local audio and video tracks directly (reuses active stream for zero delay)
     const stream = await ensureMicrophoneTrack();
     if (stream) {
       stream.getTracks().forEach(track => {
@@ -584,7 +630,7 @@ async function setupPeerConnection(isInitiator) {
             applyAudioTrackSettings(track);
           }
           peerConnection.addTrack(track, stream);
-          console.log(`🎤 Attached track to PeerConnection: ${track.kind} (id: ${track.id})`);
+          console.log(`🎤 Attached track: ${track.kind}`);
         } catch (e) {
           console.warn(`Failed to add ${track.kind} track:`, e);
         }
@@ -758,39 +804,84 @@ function unlockAudio() {
   }
 }
 
-// 6. Button Actions
-btnStartMatch.addEventListener('click', async () => {
+// 6. Matchmaking Actions (Start, Next, Stop)
+async function startMatch() {
   unlockAudio();
   await ensureMicrophoneTrack();
+  isAutoMatching = true;
+  isMatching = true;
+  isConnected = false;
+  updateMatchUIState('searching');
+  sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
+}
 
-  if (!isConnected && !isMatching) {
-    sendSignal('join_queue', { chat_type: 'video' });
-    isMatching = true;
-    startBtnText.textContent = 'Searching...';
-    btnStartMatch.className = 'bottom-btn btn-start-match matching';
-    matchStatusText.textContent = 'Searching for a stranger...';
+function nextMatch() {
+  unlockAudio();
+  isAutoMatching = true;
+  clearTimeout(autoNextTimer);
+
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (e) {}
+    peerConnection = null;
+  }
+  remoteStream = null;
+  pendingCandidates = [];
+  isMatching = true;
+  isConnected = false;
+  messagesContainer.innerHTML = '';
+  updateMatchUIState('searching');
+  matchStatusText.textContent = 'Skipping to next stranger...';
+  sendSignal('next', { session_id: sessionId, chat_type: 'video', gender: genderMode });
+}
+
+function stopMatch() {
+  isAutoMatching = false;
+  isMatching = false;
+  isConnected = false;
+  clearTimeout(autoNextTimer);
+
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (e) {}
+    peerConnection = null;
+  }
+  remoteStream = null;
+  pendingCandidates = [];
+  sendSignal('stop', { session_id: sessionId });
+  sessionId = null;
+  updateMatchUIState('idle');
+  matchStatusText.textContent = 'Matching stopped. Click "Start Match" to begin!';
+  showToast('Matching stopped.');
+}
+
+// Event Listeners for Match Control Buttons
+btnStartMatch.addEventListener('click', startMatch);
+
+if (btnNextMatch) {
+  btnNextMatch.addEventListener('click', nextMatch);
+}
+
+if (btnQuickNext) {
+  btnQuickNext.addEventListener('click', nextMatch);
+}
+
+if (btnStopMatch) {
+  btnStopMatch.addEventListener('click', stopMatch);
+}
+
+btnFreeMatch.addEventListener('click', () => {
+  if (!isAutoMatching) {
+    startMatch();
   } else {
-    if (peerConnection) {
-      peerConnection.close();
-      peerConnection = null;
-    }
-    remoteStream = null;
-    sendSignal('next', { session_id: sessionId, chat_type: 'video' });
-    isMatching = true;
-    isConnected = false;
-    startBtnText.textContent = 'Searching...';
-    btnStartMatch.className = 'bottom-btn btn-start-match matching';
-    strangerPlaceholder.style.display = 'flex';
-    strangerBadge.style.display = 'none';
-    if (remoteCanvas) remoteCanvas.style.display = 'none';
-    remoteVideo.style.display = 'none';
-    matchStatusText.textContent = 'Searching for a stranger...';
-    messagesContainer.innerHTML = '';
+    nextMatch();
   }
 });
 
-btnFreeMatch.addEventListener('click', () => {
-  btnStartMatch.click();
+btnNewChat.addEventListener('click', () => {
+  if (!isAutoMatching) {
+    startMatch();
+  } else {
+    nextMatch();
+  }
 });
 
 btnStore.addEventListener('click', () => {
@@ -811,10 +902,6 @@ document.querySelectorAll('.nav-link').forEach(link => {
     link.classList.add('active');
     showToast(link.textContent.trim() + ' selected.');
   });
-});
-
-btnNewChat.addEventListener('click', () => {
-  btnStartMatch.click();
 });
 
 if (btnToggleMic) {
@@ -855,25 +942,59 @@ if (btnToggleCam) {
   }, { passive: true });
 });
 
+// Automatic reconnection when stranger leaves
 function handleStrangerDisconnected() {
-  isConnected = false;
-  isMatching = false;
-  remoteStream = null;
   if (peerConnection) {
-    peerConnection.close();
+    try { peerConnection.close(); } catch (e) {}
     peerConnection = null;
   }
-  startBtnText.textContent = 'Start Match';
-  btnStartMatch.className = 'bottom-btn btn-start-match';
-  strangerPlaceholder.style.display = 'flex';
-  strangerBadge.style.display = 'none';
-  if (remoteCanvas) remoteCanvas.style.display = 'none';
-  remoteVideo.style.display = 'none';
-  matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';
-  messageInput.disabled = true;
-  btnSendMessage.disabled = true;
-  addMessage('Stranger has disconnected.', 'system');
+  remoteStream = null;
+  pendingCandidates = [];
+  isConnected = false;
+
+  if (isAutoMatching) {
+    // Session stays active! Instantly search for the next stranger automatically
+    isMatching = true;
+    updateMatchUIState('searching');
+    matchStatusText.textContent = 'Stranger disconnected. Finding next stranger...';
+    showToast('Stranger left. Auto-connecting next...');
+    addMessage('Stranger has disconnected. Finding next stranger...', 'system');
+
+    clearTimeout(autoNextTimer);
+    autoNextTimer = setTimeout(() => {
+      if (isAutoMatching) {
+        sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
+      }
+    }, 200);
+  } else {
+    updateMatchUIState('idle');
+    matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';
+    addMessage('Stranger has disconnected.', 'system');
+  }
 }
+
+// Keyboard shortcuts (Esc, Space, Right Arrow)
+window.addEventListener('keydown', (e) => {
+  const isInputFocused = document.activeElement && (
+    document.activeElement.tagName === 'INPUT' || 
+    document.activeElement.tagName === 'TEXTAREA'
+  );
+
+  if (e.key === 'Escape') {
+    if (isConnected || isMatching) {
+      nextMatch();
+    } else if (isAutoMatching) {
+      stopMatch();
+    }
+  } else if ((e.key === ' ' || e.key === 'ArrowRight') && !isInputFocused) {
+    e.preventDefault();
+    if (!isAutoMatching) {
+      startMatch();
+    } else {
+      nextMatch();
+    }
+  }
+});
 
 const btnGender = document.getElementById('btnGender');
 let genderMode = 'any';
@@ -886,7 +1007,7 @@ btnGender.addEventListener('click', () => {
   ];
   const index = modes.findIndex(mode => mode.value === genderMode);
   genderMode = modes[(index + 1) % modes.length].value;
-  btnGender.innerHTML = `<i class="fa-solid fa-venus-mars"></i> ${modes[(index + 1) % modes.length].label}`;
+  btnGender.innerHTML = `<i class="fa-solid fa-venus-mars"></i> <span>${modes[(index + 1) % modes.length].label}</span>`;
   showToast('Gender filter set to ' + modes[(index + 1) % modes.length].label + '.');
 });
 
@@ -943,5 +1064,7 @@ window.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
   loadCurrentUser();
   setAuthMode('login');
+  updateMatchUIState('idle');
 });
+
 

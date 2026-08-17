@@ -177,10 +177,10 @@ class SignalingManager:
             if user_id in self.waiting_queue:
                 self.waiting_queue.remove(user_id)
 
-            # Matchmaking: Find a valid waiting candidate
+            # Matchmaking: Find earliest valid waiting candidate for fastest pairing
             candidates = [p for p in self.waiting_queue if p != user_id and p in self.active_sockets]
             if candidates:
-                peer_id = random.choice(candidates)
+                peer_id = candidates[0]
                 self.waiting_queue.remove(peer_id)
 
                 session_id = str(uuid.uuid4())
@@ -191,20 +191,23 @@ class SignalingManager:
                 self.user_session_map[user_id] = session_id
                 self.user_session_map[peer_id] = session_id
 
-                logger.info(f"MATCH CREATED: {user_id} <===> {peer_id} (Session: {session_id})")
+                logger.info(f"⚡ INSTANT MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
 
-                await self.send_to_user(user_id, {
-                    "type": "matched",
-                    "session_id": session_id,
-                    "role": "initiator",
-                    "peer_id": peer_id
-                })
-                await self.send_to_user(peer_id, {
-                    "type": "matched",
-                    "session_id": session_id,
-                    "role": "receiver",
-                    "peer_id": user_id
-                })
+                # Dispatch matched events concurrently for minimal latency
+                await asyncio.gather(
+                    self.send_to_user(user_id, {
+                        "type": "matched",
+                        "session_id": session_id,
+                        "role": "initiator",
+                        "peer_id": peer_id
+                    }),
+                    self.send_to_user(peer_id, {
+                        "type": "matched",
+                        "session_id": session_id,
+                        "role": "receiver",
+                        "peer_id": user_id
+                    })
+                )
                 return
 
             # No peer available -> Add to waiting queue
@@ -214,6 +217,22 @@ class SignalingManager:
 
     async def handle_next(self, user_id: str, session_id: Optional[str] = None):
         await self.join_queue(user_id)
+
+    async def leave_queue(self, user_id: str):
+        async with self._lock:
+            if user_id in self.waiting_queue:
+                self.waiting_queue.remove(user_id)
+            sess_id = self.user_session_map.get(user_id)
+            if sess_id and sess_id in self.active_sessions:
+                sess = self.active_sessions[sess_id]
+                peer = sess["user_b"] if sess["user_a"] == user_id else sess["user_a"]
+                del self.active_sessions[sess_id]
+                if user_id in self.user_session_map:
+                    del self.user_session_map[user_id]
+                if peer in self.user_session_map:
+                    del self.user_session_map[peer]
+                asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
+        await self.send_to_user(user_id, {"type": "stopped"})
 
 
 manager = SignalingManager()
@@ -239,9 +258,12 @@ async def websocket_endpoint(
             if event_type == "join_queue":
                 await manager.join_queue(user_id)
 
-            elif event_type == "next":
+            elif event_type in ("next", "skip"):
                 sess_id = payload.get("session_id")
                 await manager.handle_next(user_id, sess_id)
+
+            elif event_type == "stop":
+                await manager.leave_queue(user_id)
 
             elif event_type in ("offer", "answer", "ice_candidate", "message", "typing"):
                 sess_id = payload.get("session_id") or manager.user_session_map.get(user_id)
@@ -264,6 +286,7 @@ async def websocket_endpoint(
     except Exception as e:
         logger.error(f"WebSocket error for {user_id}: {e}")
         await manager.disconnect(user_id)
+
 
 
 # =========================================================

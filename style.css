@@ -497,25 +497,88 @@ body {
   transform: scale(0.99);
 }
 
-.btn-gender,
-.btn-preferences {
+.btn-gender {
   background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);
   color: #ffffff;
   box-shadow: 0 2px 6px rgba(249, 115, 22, 0.25);
 }
 
 .btn-start-match {
-  background: linear-gradient(180deg, #60a5fa 0%, #3b82f6 100%);
+  background: linear-gradient(180deg, #3b82f6 0%, #1d4ed8 100%);
   color: #ffffff;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+  font-size: 15px;
 }
 
 .btn-start-match.matching {
   background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
+  animation: pulseMatching 1.5s infinite ease-in-out;
 }
 
-.btn-start-match.connected {
-  background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+@keyframes pulseMatching {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+  70% { transform: scale(1.02); box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+.btn-next-match {
+  background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+  font-size: 15px;
+  animation: popIn 0.2s ease;
+}
+
+.btn-next-match:hover {
+  background: linear-gradient(180deg, #16a34a 0%, #15803d 100%);
+}
+
+.btn-stop {
+  background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.3);
+  animation: popIn 0.2s ease;
+}
+
+.btn-stop:hover {
+  background: linear-gradient(180deg, #dc2626 0%, #991b1b 100%);
+}
+
+/* Floating Quick Next Button on Stranger Video */
+.quick-next-btn {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  z-index: 25;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: #22c55e;
+  border: 1.5px solid rgba(34, 197, 94, 0.5);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: all 0.2s ease;
+  animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.quick-next-btn:hover {
+  background: #22c55e;
+  color: #ffffff;
+  border-color: #22c55e;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(34, 197, 94, 0.4);
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 /* =========================================================
