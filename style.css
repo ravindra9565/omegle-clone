@@ -541,20 +541,28 @@ body {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .modal-box {
   background: #ffffff;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 24px;
   width: 90%;
-  max-width: 360px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  max-width: 380px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
 }
 
 .modal-box h3 {

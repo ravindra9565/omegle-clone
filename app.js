@@ -404,44 +404,64 @@ async function loadCurrentUser() {
   const token = getAuthToken();
   if (!token) {
     renderProfile(null);
+    openAuthModal();
     return;
   }
 
   try {
     const data = await apiFetch('/api/auth/me');
     renderProfile(data.user);
+    if (authModal) authModal.style.display = 'none';
+    initLocalCamera();
   } catch (error) {
     localStorage.removeItem('omegle_auth_token');
     renderProfile(null);
+    openAuthModal();
   }
 }
 
 function openAuthModal() {
+  if (!authModal) return;
   authModal.style.display = 'flex';
   if (currentUser) {
     authForm.style.display = 'none';
     authProfileBox.style.display = 'flex';
+    if (btnCloseAuthModal) btnCloseAuthModal.style.display = 'flex';
   } else {
     authForm.style.display = 'flex';
     authProfileBox.style.display = 'none';
+    if (btnCloseAuthModal) btnCloseAuthModal.style.display = 'none';
     setAuthMode('login');
   }
 }
 
 function closeAuthModal() {
-  authModal.style.display = 'none';
+  if (!currentUser) {
+    showToast('⚠️ Please login or signup first to access GlobChat.');
+    return;
+  }
+  if (authModal) authModal.style.display = 'none';
   if (authStatus) authStatus.textContent = '';
 }
 
 async function handleAuthSubmit(event) {
   event.preventDefault();
-  const name = fullName.value.trim();
+  const name = fullName ? fullName.value.trim() : '';
   const email = authEmail.value.trim();
   const password = authPassword.value;
 
   if (!email || !password) {
     authStatus.textContent = 'Email and password are required.';
     return;
+  }
+  if (authMode === 'signup' && !name) {
+    authStatus.textContent = 'Please enter your full name.';
+    return;
+  }
+
+  if (authSubmitBtn) {
+    authSubmitBtn.disabled = true;
+    authSubmitBtn.textContent = 'Processing...';
   }
 
   try {
@@ -458,10 +478,19 @@ async function handleAuthSubmit(event) {
     localStorage.setItem('omegle_auth_token', result.token);
     renderProfile(result.user);
     authForm.reset();
-    closeAuthModal();
-    showToast(authMode === 'signup' ? 'Account created successfully.' : 'Logged in successfully.');
+    if (authModal) authModal.style.display = 'none';
+    if (authStatus) authStatus.textContent = '';
+    
+    // Start camera immediately on successful login
+    initLocalCamera();
+    showToast(authMode === 'signup' ? `🎉 Welcome ${result.user.name}! Account created.` : `👋 Welcome back ${result.user.name}!`);
   } catch (error) {
     authStatus.textContent = error.message;
+  } finally {
+    if (authSubmitBtn) {
+      authSubmitBtn.disabled = false;
+      authSubmitBtn.textContent = authMode === 'signup' ? 'Create Account' : 'Login';
+    }
   }
 }
 
@@ -472,12 +501,20 @@ async function handleLogout() {
     console.warn('Logout request failed:', error);
   } finally {
     localStorage.removeItem('omegle_auth_token');
+    currentUser = null;
     renderProfile(null);
-    authForm.style.display = 'flex';
-    authProfileBox.style.display = 'none';
-    authForm.reset();
-    closeAuthModal();
-    showToast('Logged out.');
+    if (localStream) {
+      localStream.getTracks().forEach(t => t.stop());
+      localStream = null;
+    }
+    if (peerConnection) {
+      try { peerConnection.close(); } catch (e) {}
+      peerConnection = null;
+    }
+    updateMatchUIState('idle');
+    setAuthMode('login');
+    openAuthModal();
+    showToast('Logged out successfully.');
   }
 }
 
@@ -812,6 +849,12 @@ function unlockAudio() {
 
 // 6. Matchmaking Action (Single Button: Start Match -> Next Match)
 async function handleMatchButtonClick() {
+  if (!currentUser) {
+    showToast('⚠️ Please login or create an account to start video matching!');
+    openAuthModal();
+    return;
+  }
+
   unlockAudio();
   await ensureMicrophoneTrack();
   clearTimeout(autoNextTimer);
@@ -1015,10 +1058,8 @@ authModal.addEventListener('click', (event) => {
 // Init on Load
 window.addEventListener('DOMContentLoaded', () => {
   checkSecureContext();
-  initLocalCamera();
   connectWebSocket();
   loadCurrentUser();
-  setAuthMode('login');
   updateMatchUIState('idle');
 });
 
