@@ -145,16 +145,24 @@ body {
 }
 
 .profile-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: #090d16;
-  color: #ffffff;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 6px;
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 14px;
   font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+  transition: all 0.2s ease;
+}
+
+.profile-avatar:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
 }
 
 /* =========================================================

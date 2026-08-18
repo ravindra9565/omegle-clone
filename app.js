@@ -384,15 +384,16 @@ function setAuthMode(mode) {
 function renderProfile(user) {
   currentUser = user || null;
   if (!user) {
-    profileAvatar.innerHTML = '<i class="fa-solid fa-user"></i>';
-    profileAvatar.style.background = '#090d16';
+    profileAvatar.innerHTML = '<i class="fa-solid fa-circle-user"></i> <span id="navUserText">Login</span>';
+    profileAvatar.style.background = '#2563eb';
     authProfileBox.style.display = 'none';
     return;
   }
 
+  const name = user.name || user.email.split('@')[0] || 'User';
   const letters = (user.name || user.email || 'U').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase();
-  profileAvatar.innerHTML = `<span>${letters}</span>`;
-  profileAvatar.style.background = 'linear-gradient(135deg, #3b82f6, #1d4ed8)';
+  profileAvatar.innerHTML = `<i class="fa-solid fa-user-check"></i> <span id="navUserText">${name}</span>`;
+  profileAvatar.style.background = 'linear-gradient(135deg, #10b981, #059669)';
   profileAvatarLarge.textContent = letters;
   profileNameText.textContent = user.name || 'User';
   profileEmailText.textContent = user.email || '';
