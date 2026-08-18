@@ -189,8 +189,16 @@ def get_token_from_request(request: Request) -> Optional[str]:
 
 
 # =========================================================
-# REST API ENDPOINTS
+# REST API ENDPOINTS & HEALTH CHECKS
 # =========================================================
+@app.get("/healthz")
+@app.get("/health")
+@app.head("/healthz")
+@app.head("/")
+async def health_check():
+    return {"status": "ok", "service": "globchat"}
+
+
 @app.get("/api/online")
 async def get_online_count():
     count = max(1, len(manager.active_sockets))
