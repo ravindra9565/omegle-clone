@@ -8,6 +8,8 @@ const RTC_CONFIG = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
     { urls: 'stun:global.stun.twilio.com:3478' },
+    { urls: 'stun:stun.services.mozilla.com' },
+    { urls: 'stun:stun.stunprotocol.org:3478' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
@@ -19,7 +21,9 @@ const RTC_CONFIG = {
       credential: 'openrelay'
     }
   ],
-  iceCandidatePoolSize: 10
+  iceCandidatePoolSize: 10,
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require'
 };
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
@@ -713,33 +717,36 @@ async function setupPeerConnection(isInitiator) {
         if (remoteVideo.srcObject !== incomingStream) {
           remoteVideo.srcObject = incomingStream;
         }
+        remoteVideo.muted = true; // Prevents browser autoplay blocking
         remoteVideo.playsInline = true;
         remoteVideo.setAttribute('playsinline', '');
         remoteVideo.setAttribute('webkit-playsinline', '');
         remoteVideo.style.display = 'block';
-        remoteVideo.style.zIndex = '5';
+        remoteVideo.style.zIndex = '6';
 
-        const startPlayback = () => {
-          const playPromise = remoteVideo.play();
-          if (playPromise !== undefined) {
-            playPromise.then(() => {
+        const triggerPlayback = () => {
+          const p = remoteVideo.play();
+          if (p !== undefined) {
+            p.then(() => {
+              console.log('✅ Remote video playing live stream');
               if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
               if (strangerBadge) strangerBadge.style.display = 'block';
               if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
             }).catch(err => {
-              console.warn('remoteVideo unmuted play failed, trying muted:', err);
+              console.warn('remoteVideo play catch:', err);
               remoteVideo.muted = true;
-              remoteVideo.play().then(() => {
-                if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-                if (strangerBadge) strangerBadge.style.display = 'block';
-              }).catch(() => {});
+              remoteVideo.play().catch(() => {});
             });
           }
         };
 
-        startPlayback();
-        remoteVideo.onloadedmetadata = () => {
-          startPlayback();
+        triggerPlayback();
+        remoteVideo.onloadedmetadata = triggerPlayback;
+        remoteVideo.onloadeddata = triggerPlayback;
+        remoteVideo.oncanplay = triggerPlayback;
+        remoteVideo.onplaying = () => {
+          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
+          if (strangerBadge) strangerBadge.style.display = 'block';
         };
       }
 
