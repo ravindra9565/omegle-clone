@@ -22,13 +22,163 @@ logger = logging.getLogger("globchat_server")
 
 app = FastAPI(title="GlobChat Server", version="2.0.0")
 
-# In-memory authentication and session store
-USER_STORE: Dict[str, dict] = {}
-SESSION_TOKENS: Dict[str, str] = {}
+import sqlite3
+
+# Dual Database Setup: Cloud PostgreSQL (Neon/Render) or Local SQLite
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+USE_POSTGRES = bool(DATABASE_URL)
+psycopg2 = None
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        logger.info("🐘 PostgreSQL Database Mode Enabled (Cloud DB: Neon/Render)")
+    except ImportError:
+        logger.warning("psycopg2 not installed locally, falling back to SQLite")
+        USE_POSTGRES = False
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "globchat.db")
+
+
+def get_db_connection():
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    return sqlite3.connect(DB_PATH)
+
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    if USE_POSTGRES:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email VARCHAR(255) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token VARCHAR(255) PRIMARY KEY,
+                email VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    else:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
+            )
+        """)
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized successfully.")
+
+
+init_db()
 
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.strip().encode("utf-8")).hexdigest()
+
+
+def db_get_user(email: str) -> Optional[dict]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    param = (email.lower().strip(),)
+    if USE_POSTGRES:
+        cursor.execute("SELECT email, name, password_hash FROM users WHERE email = %s", param)
+    else:
+        cursor.execute("SELECT email, name, password_hash FROM users WHERE email = ?", param)
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"email": row[0], "name": row[1], "password_hash": row[2]}
+    return None
+
+
+def db_create_user(name: str, email: str, password_hash: str) -> bool:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        params = (email.lower().strip(), name.strip(), password_hash)
+        if USE_POSTGRES:
+            cursor.execute("INSERT INTO users (email, name, password_hash) VALUES (%s, %s, %s)", params)
+        else:
+            cursor.execute("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)", params)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
+        return False
+
+
+def db_create_session(email: str) -> str:
+    token = uuid.uuid4().hex
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    params = (token, email.lower().strip())
+    if USE_POSTGRES:
+        cursor.execute("INSERT INTO sessions (token, email) VALUES (%s, %s)", params)
+    else:
+        cursor.execute("INSERT INTO sessions (token, email) VALUES (?, ?)", params)
+    conn.commit()
+    conn.close()
+    return token
+
+
+def db_get_session_user(token: str) -> Optional[dict]:
+    if not token:
+        return None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    params = (token.strip(),)
+    query = """
+        SELECT u.email, u.name 
+        FROM sessions s 
+        JOIN users u ON s.email = u.email 
+        WHERE s.token = %s
+    """ if USE_POSTGRES else """
+        SELECT u.email, u.name 
+        FROM sessions s 
+        JOIN users u ON s.email = u.email 
+        WHERE s.token = ?
+    """
+    cursor.execute(query, params)
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"email": row[0], "name": row[1]}
+    return None
+
+
+def db_delete_session(token: str):
+    if not token:
+        return
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    params = (token.strip(),)
+    if USE_POSTGRES:
+        cursor.execute("DELETE FROM sessions WHERE token = %s", params)
+    else:
+        cursor.execute("DELETE FROM sessions WHERE token = ?", params)
+    conn.commit()
+    conn.close()
 
 
 def get_token_from_request(request: Request) -> Optional[str]:
@@ -62,17 +212,17 @@ async def signup(request: Request):
         return JSONResponse({"error": "Name, email and password are required."}, status_code=400)
     if "@" not in email or "." not in email:
         return JSONResponse({"error": "Please enter a valid email address."}, status_code=400)
-    if email in USER_STORE:
-        return JSONResponse({"error": "This email is already registered."}, status_code=409)
 
-    USER_STORE[email] = {
-        "name": name,
-        "email": email,
-        "password_hash": hash_password(password)
-    }
+    existing_user = db_get_user(email)
+    if existing_user:
+        return JSONResponse({"error": "This email is already registered. Please login instead."}, status_code=409)
 
-    token = uuid.uuid4().hex
-    SESSION_TOKENS[token] = email
+    pwd_hash = hash_password(password)
+    created = db_create_user(name, email, pwd_hash)
+    if not created:
+        return JSONResponse({"error": "Failed to create account. Email may already exist."}, status_code=409)
+
+    token = db_create_session(email)
     return {"token": token, "user": {"name": name, "email": email}}
 
 
@@ -86,25 +236,29 @@ async def login(request: Request):
     email = str(payload.get("email", "")).strip().lower()
     password = str(payload.get("password", ""))
 
-    user = USER_STORE.get(email)
-    if not user or user["password_hash"] != hash_password(password):
-        return JSONResponse({"error": "Invalid email or password."}, status_code=401)
+    if not email or not password:
+        return JSONResponse({"error": "Email and password are required."}, status_code=400)
 
-    token = uuid.uuid4().hex
-    SESSION_TOKENS[token] = email
+    user = db_get_user(email)
+    if not user:
+        return JSONResponse({"error": "Account not found. Please click 'Sign Up' to create a new account first."}, status_code=404)
+
+    if user["password_hash"] != hash_password(password):
+        return JSONResponse({"error": "Incorrect password. Please try again."}, status_code=401)
+
+    token = db_create_session(email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
 
 @app.get("/api/auth/me")
 async def get_profile(request: Request):
     token = get_token_from_request(request)
-    email = SESSION_TOKENS.get(token)
-    if not email:
+    if not token:
         return JSONResponse({"error": "Not authenticated."}, status_code=401)
 
-    user = USER_STORE.get(email)
+    user = db_get_session_user(token)
     if not user:
-        return JSONResponse({"error": "User not found."}, status_code=404)
+        return JSONResponse({"error": "Session expired or user not found."}, status_code=401)
 
     return {"user": {"name": user["name"], "email": user["email"]}}
 
@@ -112,8 +266,8 @@ async def get_profile(request: Request):
 @app.post("/api/auth/logout")
 async def logout(request: Request):
     token = get_token_from_request(request)
-    if token and token in SESSION_TOKENS:
-        del SESSION_TOKENS[token]
+    if token:
+        db_delete_session(token)
     return {"success": True}
 
 

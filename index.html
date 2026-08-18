@@ -163,6 +163,11 @@
 
   <div class="modal-backdrop" id="authModal" style="display: none;">
     <div class="auth-box">
+      <div class="auth-box-header">
+        <h3 id="authModalTitle">Welcome to GlobChat</h3>
+        <button class="modal-close-icon" id="btnCloseAuthModal" type="button" title="Close">✕</button>
+      </div>
+
       <div class="auth-tabs">
         <button class="auth-tab active" data-auth-tab="login" type="button">Login</button>
         <button class="auth-tab" data-auth-tab="signup" type="button">Sign Up</button>
@@ -187,15 +192,21 @@
 
         <div class="field-group">
           <label for="authEmail">Email</label>
-          <input id="authEmail" type="email" placeholder="name@example.com" required />
+          <input id="authEmail" type="email" placeholder="name@example.com" required autocomplete="email" />
         </div>
 
         <div class="field-group">
           <label for="authPassword">Password</label>
-          <input id="authPassword" type="password" placeholder="Enter password" required />
+          <input id="authPassword" type="password" placeholder="Enter password" required autocomplete="current-password" />
         </div>
 
         <button class="primary-btn" id="authSubmitBtn" type="submit">Login</button>
+
+        <div class="auth-switch-box">
+          <span id="authSwitchText">Don't have an account?</span>
+          <button type="button" class="link-btn" id="btnToggleAuthMode">Sign Up</button>
+        </div>
+
         <div class="auth-status" id="authStatus"></div>
       </form>
     </div>
@@ -203,6 +214,6 @@
 
   <div id="toastContainer" class="toast-container"></div>
 
-  <script src="app.js?v=20260816"></script>
+  <script src="app.js?v=20260818"></script>
 </body>
 </html>

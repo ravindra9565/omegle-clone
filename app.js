@@ -7,6 +7,7 @@ const RTC_CONFIG = {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
     {
       urls: [
         'turn:openrelay.metered.ca:80',
@@ -17,7 +18,8 @@ const RTC_CONFIG = {
       username: 'openrelay',
       credential: 'openrelay'
     }
-  ]
+  ],
+  iceCandidatePoolSize: 10
 };
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
@@ -70,6 +72,8 @@ const btnFreeMatch = document.getElementById('btnFreeMatch');
 const btnStore = document.getElementById('btnStore');
 const profileAvatar = document.getElementById('profileAvatar');
 const authModal = document.getElementById('authModal');
+const btnCloseAuthModal = document.getElementById('btnCloseAuthModal');
+const authModalTitle = document.getElementById('authModalTitle');
 const authForm = document.getElementById('authForm');
 const authStatus = document.getElementById('authStatus');
 const authEmail = document.getElementById('authEmail');
@@ -77,6 +81,8 @@ const authPassword = document.getElementById('authPassword');
 const fullName = document.getElementById('fullName');
 const nameField = document.getElementById('nameField');
 const authSubmitBtn = document.getElementById('authSubmitBtn');
+const authSwitchText = document.getElementById('authSwitchText');
+const btnToggleAuthMode = document.getElementById('btnToggleAuthMode');
 const btnLogout = document.getElementById('btnLogout');
 const authProfileBox = document.getElementById('authProfileBox');
 const profileNameText = document.getElementById('profileNameText');
@@ -361,8 +367,17 @@ function setAuthMode(mode) {
   authTabs.forEach(tab => {
     tab.classList.toggle('active', tab.dataset.authTab === mode);
   });
+  if (authModalTitle) {
+    authModalTitle.textContent = isSignup ? 'Create Your Account' : 'Welcome Back';
+  }
   if (nameField) nameField.style.display = isSignup ? 'flex' : 'none';
   if (authSubmitBtn) authSubmitBtn.textContent = isSignup ? 'Create Account' : 'Login';
+  if (authSwitchText) {
+    authSwitchText.textContent = isSignup ? 'Already have an account?' : "Don't have an account?";
+  }
+  if (btnToggleAuthMode) {
+    btnToggleAuthMode.textContent = isSignup ? 'Login' : 'Sign Up';
+  }
   if (authStatus) authStatus.textContent = '';
 }
 
@@ -834,6 +849,14 @@ btnStore.addEventListener('click', () => {
 });
 
 profileAvatar.addEventListener('click', openAuthModal);
+if (btnCloseAuthModal) {
+  btnCloseAuthModal.addEventListener('click', closeAuthModal);
+}
+if (btnToggleAuthMode) {
+  btnToggleAuthMode.addEventListener('click', () => {
+    setAuthMode(authMode === 'login' ? 'signup' : 'login');
+  });
+}
 btnLogout.addEventListener('click', handleLogout);
 authForm.addEventListener('submit', handleAuthSubmit);
 authTabs.forEach(tab => {
