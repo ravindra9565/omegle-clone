@@ -205,6 +205,38 @@ async def get_online_count():
     return {"online": count}
 
 
+@app.post("/api/auth/quick-login")
+async def quick_login(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request JSON."}, status_code=400)
+
+    email = str(payload.get("email", "")).strip().lower()
+    name = str(payload.get("name", "")).strip()
+
+    if not email:
+        return JSONResponse({"error": "Gmail / Email address is required."}, status_code=400)
+    if "@" not in email or "." not in email:
+        return JSONResponse({"error": "Please enter a valid Gmail / Email address."}, status_code=400)
+
+    if not name:
+        name = email.split("@")[0].replace(".", " ").title()
+
+    # If user already exists in database, fetch user
+    user = db_get_user(email)
+    if not user:
+        created = db_create_user(name, email, "google_quick_auth")
+        if not created:
+            # Fallback if already exists
+            user = db_get_user(email)
+    else:
+        name = user.get("name") or name
+
+    token = db_create_session(email)
+    return {"token": token, "user": {"name": name, "email": email}}
+
+
 @app.post("/api/auth/signup")
 async def signup(request: Request):
     try:
@@ -214,22 +246,23 @@ async def signup(request: Request):
 
     name = str(payload.get("name", "")).strip()
     email = str(payload.get("email", "")).strip().lower()
-    password = str(payload.get("password", ""))
+    password = str(payload.get("password", "google_quick_auth"))
 
-    if not name or not email or not password:
-        return JSONResponse({"error": "Name, email and password are required."}, status_code=400)
+    if not email:
+        return JSONResponse({"error": "Email is required."}, status_code=400)
     if "@" not in email or "." not in email:
         return JSONResponse({"error": "Please enter a valid email address."}, status_code=400)
 
+    if not name:
+        name = email.split("@")[0].title()
+
     existing_user = db_get_user(email)
     if existing_user:
-        return JSONResponse({"error": "This email is already registered. Please login instead."}, status_code=409)
+        token = db_create_session(email)
+        return {"token": token, "user": {"name": existing_user["name"], "email": existing_user["email"]}}
 
     pwd_hash = hash_password(password)
-    created = db_create_user(name, email, pwd_hash)
-    if not created:
-        return JSONResponse({"error": "Failed to create account. Email may already exist."}, status_code=409)
-
+    db_create_user(name, email, pwd_hash)
     token = db_create_session(email)
     return {"token": token, "user": {"name": name, "email": email}}
 
@@ -242,20 +275,20 @@ async def login(request: Request):
         return JSONResponse({"error": "Invalid request JSON."}, status_code=400)
 
     email = str(payload.get("email", "")).strip().lower()
-    password = str(payload.get("password", ""))
+    name = str(payload.get("name", "")).strip()
 
-    if not email or not password:
-        return JSONResponse({"error": "Email and password are required."}, status_code=400)
+    if not email:
+        return JSONResponse({"error": "Email is required."}, status_code=400)
+
+    if not name:
+        name = email.split("@")[0].title()
 
     user = db_get_user(email)
     if not user:
-        return JSONResponse({"error": "Account not found. Please click 'Sign Up' to create a new account first."}, status_code=404)
-
-    if user["password_hash"] != hash_password(password):
-        return JSONResponse({"error": "Incorrect password. Please try again."}, status_code=401)
+        db_create_user(name, email, "google_quick_auth")
 
     token = db_create_session(email)
-    return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
+    return {"token": token, "user": {"name": name, "email": email}}
 
 
 @app.get("/api/auth/me")

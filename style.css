@@ -599,32 +599,87 @@ body {
 
 .auth-box {
   position: relative;
-  width: min(420px, 92vw);
+  width: min(440px, 92vw);
   background: #fff;
-  border-radius: 14px;
-  padding: 22px;
-  box-shadow: 0 18px 55px rgba(15, 23, 42, 0.25);
+  border-radius: 16px;
+  padding: 26px;
+  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.3);
+}
+
+.google-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-text h3 {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 2px 0;
+}
+
+.brand-text p {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.google-signin-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #1a73e8;
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 12px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(26, 115, 232, 0.3);
+  transition: all 0.2s ease;
+  margin-top: 6px;
+}
+
+.google-signin-btn:hover {
+  background: #1557b0;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(26, 115, 232, 0.4);
+}
+
+.google-signin-btn:active {
+  transform: translateY(0);
+}
+
+.auth-notice {
+  text-align: center;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.auth-notice i {
+  color: #10b981;
 }
 
 .auth-box-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.auth-box-header h3 {
-  font-size: 17px;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0;
+  margin-bottom: 18px;
 }
 
 .modal-close-icon {
   background: #f1f5f9;
   border: none;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   color: #64748b;
   font-size: 14px;
@@ -639,31 +694,6 @@ body {
 .modal-close-icon:hover {
   background: #e2e8f0;
   color: #0f172a;
-}
-
-.auth-switch-box {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  font-size: 13px;
-  color: #64748b;
-  margin-top: 4px;
-}
-
-.link-btn {
-  background: none;
-  border: none;
-  color: #2563eb;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 0;
-  font-size: 13px;
-  text-decoration: underline;
-}
-
-.link-btn:hover {
-  color: #1d4ed8;
 }
 
 .auth-tabs {
