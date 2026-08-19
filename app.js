@@ -49,6 +49,17 @@ let pingIntervalTimer = null;
 let keepAliveHttpTimer = null;
 let reconnectTimer = null;
 
+// User & Stranger Profile State
+let currentUser = null;
+let currentStranger = null;
+let userGeo = {
+  city: '',
+  state: 'Delhi',
+  country: 'India',
+  flag: '🇮🇳',
+  location: 'Delhi, India 🇮🇳'
+};
+
 // DOM Elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
@@ -58,10 +69,17 @@ const localOverlay = document.getElementById('localOverlay');
 const strangerPlaceholder = document.getElementById('strangerPlaceholder');
 const matchStatusText = document.getElementById('matchStatusText');
 const strangerBadge = document.getElementById('strangerBadge');
+const strangerVideoTagText = document.getElementById('strangerVideoTagText');
+const strangerTagLoc = document.getElementById('strangerTagLoc');
 const onlineCount = document.getElementById('onlineCount');
 const micStatusIndicator = document.getElementById('micStatusIndicator');
 const serverStatusBanner = document.getElementById('serverStatusBanner');
 const serverStatusText = document.getElementById('serverStatusText');
+
+const chatHeaderBar = document.getElementById('chatHeaderBar');
+const strangerHeaderName = document.getElementById('strangerHeaderName');
+const strangerLocationText = document.getElementById('strangerLocationText');
+const strangerHeaderAvatar = document.getElementById('strangerHeaderAvatar');
 
 const btnStartMatch = document.getElementById('btnStartMatch');
 const startBtnText = document.getElementById('startBtnText');
@@ -95,10 +113,45 @@ const authForm = document.getElementById('authForm');
 const fullName = document.getElementById('fullName');
 const authEmail = document.getElementById('authEmail');
 const authSubmitBtn = document.getElementById('authSubmitBtn');
-const btnGuestLogin = document.getElementById('btnGuestLogin');
 const authStatus = document.getElementById('authStatus');
 
-let currentUser = null;
+// =========================================================
+// GEOLOCATION DETECTION (STATE & COUNTRY)
+// =========================================================
+async function fetchUserGeoLocation() {
+  try {
+    const res = await fetch('https://ipwho.is/', { cache: 'no-store' });
+    const data = await res.json();
+    if (data && data.success) {
+      const city = data.city || '';
+      const state = data.region || data.region_code || '';
+      const country = data.country || 'India';
+      const flag = data.flag?.emoji || '🇮🇳';
+      const locDisplay = `${state ? state + ', ' : (city ? city + ', ' : '')}${country} ${flag}`;
+      userGeo = {
+        city,
+        state: state || city || 'India',
+        country,
+        flag,
+        location: locDisplay
+      };
+      return userGeo;
+    }
+  } catch (e) {
+    console.debug('Geo lookup notice:', e);
+  }
+
+  // Backup fallback using Intl timezone
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    if (tz.includes('Calcutta') || tz.includes('Kolkata') || tz.includes('Asia')) {
+      userGeo = { city: '', state: 'Uttar Pradesh', country: 'India', flag: '🇮🇳', location: 'Uttar Pradesh, India 🇮🇳' };
+    }
+  } catch (e) {}
+  return userGeo;
+}
+
+fetchUserGeoLocation();
 
 // =========================================================
 // MATCHMAKING UI STATE
@@ -113,15 +166,17 @@ function updateMatchUIState(state) {
     if (messageInput) messageInput.disabled = true;
     if (btnSendMessage) btnSendMessage.disabled = true;
     if (matchStatusText) matchStatusText.textContent = 'Searching for a stranger...';
+    if (chatHeaderBar) chatHeaderBar.style.display = 'none';
   } else if (state === 'connected') {
     if (startBtnText) startBtnText.textContent = 'Next Match';
     if (btnStartMatch) btnStartMatch.className = 'bottom-btn btn-start-match connected';
     if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-    if (strangerBadge) strangerBadge.style.display = 'block';
+    if (strangerBadge) strangerBadge.style.display = 'flex';
     if (remoteVideo) remoteVideo.style.display = 'block';
     if (messageInput) messageInput.disabled = false;
     if (btnSendMessage) btnSendMessage.disabled = false;
     if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+    if (chatHeaderBar) chatHeaderBar.style.display = 'flex';
   } else {
     // idle / initial
     if (startBtnText) startBtnText.textContent = 'Start Match';
@@ -132,6 +187,7 @@ function updateMatchUIState(state) {
     if (messageInput) messageInput.disabled = true;
     if (btnSendMessage) btnSendMessage.disabled = true;
     if (matchStatusText) matchStatusText.textContent = 'Click "Start Match" to meet someone!';
+    if (chatHeaderBar) chatHeaderBar.style.display = 'none';
   }
 }
 
@@ -184,9 +240,9 @@ function createFallbackVideoStream() {
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = 'bold 18px Inter, sans-serif';
-    ctx.fillText('Live User', 320, 310);
+    ctx.fillText(currentUser?.name || 'Live User', 320, 310);
     ctx.font = '14px Inter, sans-serif';
-    ctx.fillText(new Date().toLocaleTimeString(), 320, 340);
+    ctx.fillText(userGeo.location || new Date().toLocaleTimeString(), 320, 340);
 
     requestAnimationFrame(draw);
   }
@@ -326,7 +382,7 @@ function connectWebSocket() {
       hideServerStatus();
       clearInterval(pingIntervalTimer);
 
-      // WebSocket Heartbeat Ping every 20s to prevent reverse-proxy timeout
+      // WebSocket Heartbeat Ping every 20s to prevent proxy timeouts
       pingIntervalTimer = setInterval(() => {
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'ping', data: { timestamp: Date.now() } }));
@@ -338,7 +394,7 @@ function connectWebSocket() {
       try {
         const payload = JSON.parse(event.data);
         if (payload.type === 'pong') {
-          return; // Heartbeat ack received
+          return;
         }
         await handleSignalEvent(payload);
       } catch (e) {
@@ -389,7 +445,7 @@ function showToast(message) {
 }
 
 // =========================================================
-// 3. PERSISTENT AUTHENTICATION & GOOGLE SIGN-IN
+// 3. PERSISTENT AUTHENTICATION (GMAIL ONLY)
 // =========================================================
 function getStoredSession() {
   try {
@@ -532,73 +588,6 @@ async function loadCurrentUser() {
   // No saved session -> Open modal & initialize Google Sign-In
   renderProfile(null);
   openAuthModal();
-  initGoogleIdentity();
-}
-
-// Initialize Official Google Identity Services SDK only if a real client ID is provided
-function initGoogleIdentity() {
-  const clientId = window.GOOGLE_CLIENT_ID || '';
-  const btnContainer = document.getElementById('googleButtonContainer');
-  const authDivider = document.querySelector('.auth-divider');
-
-  if (!clientId || clientId.includes('demo')) {
-    if (btnContainer) btnContainer.style.display = 'none';
-    if (authDivider) authDivider.style.display = 'none';
-    return;
-  }
-
-  if (window.google && window.google.accounts && window.google.accounts.id) {
-    try {
-      window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleGoogleCredentialResponse,
-        auto_select: false,
-        cancel_on_tap_outside: true
-      });
-
-      if (btnContainer) {
-        btnContainer.style.display = 'flex';
-        btnContainer.innerHTML = '';
-        if (authDivider) authDivider.style.display = 'flex';
-        window.google.accounts.id.renderButton(btnContainer, {
-          theme: 'filled_blue',
-          size: 'large',
-          shape: 'rectangular',
-          width: 320,
-          text: 'continue_with',
-          logo_alignment: 'left'
-        });
-      }
-    } catch (e) {
-      console.warn('Google Identity initialization notice:', e);
-    }
-  }
-}
-
-// Handle Official Google JWT Credential Response
-async function handleGoogleCredentialResponse(response) {
-  if (!response || !response.credential) return;
-
-  if (authStatus) authStatus.textContent = 'Logging in with Google...';
-
-  try {
-    const result = await apiFetch('/api/auth/google', {
-      method: 'POST',
-      body: JSON.stringify({ credential: response.credential })
-    });
-
-    saveStoredSession(result.user, result.token);
-    if (result.user.email) localStorage.setItem('globchat_last_email', result.user.email);
-    if (result.user.name) localStorage.setItem('globchat_last_name', result.user.name);
-
-    renderProfile(result.user);
-    if (authModal) authModal.style.display = 'none';
-    if (authStatus) authStatus.textContent = '';
-    initLocalCamera();
-    showToast(`🎉 Signed in as ${result.user.name}!`);
-  } catch (error) {
-    if (authStatus) authStatus.textContent = error.message || 'Google sign-in failed.';
-  }
 }
 
 function openAuthModal() {
@@ -622,13 +611,12 @@ function openAuthModal() {
     if (fullName && !fullName.value && lastName) {
       fullName.value = lastName;
     }
-    initGoogleIdentity();
   }
 }
 
 function closeAuthModal() {
   if (!currentUser) {
-    showToast('⚠️ Please login or continue as guest to start chatting.');
+    showToast('⚠️ Please enter your Gmail to start chatting.');
     return;
   }
   if (authModal) authModal.style.display = 'none';
@@ -651,7 +639,7 @@ async function handleAuthSubmit(event) {
 
   if (authSubmitBtn) {
     authSubmitBtn.disabled = true;
-    authSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Signing In...</span>';
+    authSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Connecting...</span>';
   }
 
   try {
@@ -685,30 +673,6 @@ async function handleAuthSubmit(event) {
         </svg>
         <span>Continue with Gmail</span>
       `;
-    }
-  }
-}
-
-async function handleGuestLogin() {
-  if (btnGuestLogin) {
-    btnGuestLogin.disabled = true;
-    btnGuestLogin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Creating Guest Session...</span>';
-  }
-
-  try {
-    const result = await apiFetch('/api/auth/guest-login', { method: 'POST' });
-    saveStoredSession(result.user, result.token);
-    renderProfile(result.user);
-    if (authModal) authModal.style.display = 'none';
-    if (authStatus) authStatus.textContent = '';
-    initLocalCamera();
-    showToast(`⚡ Connected as ${result.user.name}! Click "Start Match" to chat.`);
-  } catch (error) {
-    if (authStatus) authStatus.textContent = error.message || 'Guest login failed.';
-  } finally {
-    if (btnGuestLogin) {
-      btnGuestLogin.disabled = false;
-      btnGuestLogin.innerHTML = '<i class="fa-solid fa-bolt"></i> Continue as Guest (Instant Access)';
     }
   }
 }
@@ -768,7 +732,7 @@ async function drainPendingIceCandidates() {
 }
 
 async function handleSignalEvent(payload) {
-  const { type, session_id, role, sdp, candidate, text, is_typing, peer_id } = payload;
+  const { type, session_id, role, sdp, candidate, text, is_typing, peer_id, stranger_info } = payload;
 
   switch (type) {
     case 'searching':
@@ -781,6 +745,7 @@ async function handleSignalEvent(payload) {
       isMatching = true;
       isConnected = false;
       remoteStream = null;
+      currentStranger = null;
       pendingCandidates = [];
       updateMatchUIState('searching');
       break;
@@ -796,12 +761,24 @@ async function handleSignalEvent(payload) {
       if (remoteAudio) remoteAudio.srcObject = null;
       updateMatchUIState('connected');
 
-      if (strangerBadge) {
-        strangerBadge.innerHTML = '<span>STRANGER</span>';
-        strangerBadge.style.display = 'block';
+      // Update Stranger Info & Location Display
+      currentStranger = stranger_info || {};
+      const sName = currentStranger.name || 'Stranger';
+      const sLoc = currentStranger.location || `${currentStranger.state ? currentStranger.state + ', ' : ''}${currentStranger.country || 'India'} ${currentStranger.flag || '🇮🇳'}`;
+
+      if (strangerHeaderName) strangerHeaderName.textContent = sName;
+      if (strangerLocationText) strangerLocationText.textContent = sLoc;
+      if (strangerHeaderAvatar) {
+        strangerHeaderAvatar.textContent = sName.charAt(0).toUpperCase();
       }
-      messagesContainer.innerHTML = '<div class="message system-msg"><span>Connected to stranger. Say Hi!</span></div>';
-      if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
+      if (strangerVideoTagText) strangerVideoTagText.textContent = sName.toUpperCase();
+      if (strangerTagLoc) strangerTagLoc.textContent = sLoc;
+      if (strangerBadge) strangerBadge.style.display = 'flex';
+      if (chatHeaderBar) chatHeaderBar.style.display = 'flex';
+
+      messagesContainer.innerHTML = `<div class="message system-msg"><span>🎉 Connected with <strong>${sName}</strong> from <strong>${sLoc}</strong>! Say Hi!</span></div>`;
+      if (matchStatusText) matchStatusText.textContent = `Connected to ${sName} (${sLoc})`;
+      
       await setupPeerConnection(role === 'initiator');
       break;
 
@@ -849,11 +826,16 @@ async function handleSignalEvent(payload) {
       break;
 
     case 'message':
-      addMessage(text, payload.sender_id === userId ? 'you' : 'stranger');
+      const isMe = payload.sender_id === userId;
+      addMessage(text, isMe ? 'you' : 'stranger', isMe ? 'You' : (currentStranger?.name || 'Stranger'));
       break;
 
     case 'typing':
-      if (typingIndicator) typingIndicator.style.display = is_typing ? 'block' : 'none';
+      if (typingIndicator) {
+        const typingName = currentStranger?.name || 'Stranger';
+        typingIndicator.innerHTML = `<span>${typingName} is typing...</span>`;
+        typingIndicator.style.display = is_typing ? 'block' : 'none';
+      }
       break;
 
     case 'stopped':
@@ -934,7 +916,7 @@ async function setupPeerConnection(isInitiator) {
           if (p !== undefined) {
             p.then(() => {
               if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-              if (strangerBadge) strangerBadge.style.display = 'block';
+              if (strangerBadge) strangerBadge.style.display = 'flex';
               if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
             }).catch(err => {
               remoteVideo.muted = true;
@@ -963,7 +945,7 @@ async function setupPeerConnection(isInitiator) {
       if (peerConnection.connectionState === 'connected') {
         if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
         if (remoteVideo) remoteVideo.style.display = 'block';
-        if (strangerBadge) strangerBadge.style.display = 'block';
+        if (strangerBadge) strangerBadge.style.display = 'flex';
         if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
       } else if (peerConnection.connectionState === 'failed') {
         try { peerConnection.restartIce(); } catch (e) {}
@@ -1036,7 +1018,7 @@ function unlockAudio() {
 // 5. Matchmaking Action
 async function handleMatchButtonClick() {
   if (!currentUser) {
-    showToast('⚠️ Please sign in with Google or continue as guest first!');
+    showToast('⚠️ Please enter your Gmail to start video chat!');
     openAuthModal();
     return;
   }
@@ -1045,25 +1027,41 @@ async function handleMatchButtonClick() {
   await ensureMicrophoneTrack();
   clearTimeout(autoNextTimer);
 
+  const payloadInfo = {
+    chat_type: 'video',
+    gender: genderMode,
+    user_info: {
+      name: currentUser.name || 'User',
+      email: currentUser.email || '',
+      avatar: currentUser.avatar || '',
+      city: userGeo.city,
+      state: userGeo.state,
+      country: userGeo.country,
+      flag: userGeo.flag,
+      location: userGeo.location
+    }
+  };
+
   if (!isAutoMatching) {
     isAutoMatching = true;
     isMatching = true;
     isConnected = false;
     updateMatchUIState('searching');
-    sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
+    sendSignal('join_queue', payloadInfo);
   } else {
     if (peerConnection) {
       try { peerConnection.close(); } catch (e) {}
       peerConnection = null;
     }
     remoteStream = null;
+    currentStranger = null;
     pendingCandidates = [];
     isMatching = true;
     isConnected = false;
     messagesContainer.innerHTML = '';
     updateMatchUIState('searching');
     matchStatusText.textContent = 'Skipping to next stranger...';
-    sendSignal('next', { session_id: sessionId, chat_type: 'video', gender: genderMode });
+    sendSignal('next', { session_id: sessionId, ...payloadInfo });
   }
 }
 
@@ -1075,6 +1073,7 @@ function handleStrangerDisconnected() {
   remoteStream = null;
   pendingCandidates = [];
   isConnected = false;
+  currentStranger = null;
 
   if (isAutoMatching) {
     isMatching = true;
@@ -1082,7 +1081,21 @@ function handleStrangerDisconnected() {
     matchStatusText.textContent = 'Stranger disconnected. Finding next stranger...';
     showToast('Stranger left. Finding next...');
     addMessage('Stranger has disconnected. Finding next stranger...', 'system');
-    sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
+    
+    sendSignal('join_queue', {
+      chat_type: 'video',
+      gender: genderMode,
+      user_info: {
+        name: currentUser?.name || 'User',
+        email: currentUser?.email || '',
+        avatar: currentUser?.avatar || '',
+        city: userGeo.city,
+        state: userGeo.state,
+        country: userGeo.country,
+        flag: userGeo.flag,
+        location: userGeo.location
+      }
+    });
   } else {
     updateMatchUIState('idle');
     matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';
@@ -1107,7 +1120,6 @@ if (profileAvatar) profileAvatar.addEventListener('click', openAuthModal);
 if (btnCloseAuthModal) btnCloseAuthModal.addEventListener('click', closeAuthModal);
 if (btnLogout) btnLogout.addEventListener('click', handleLogout);
 if (authForm) authForm.addEventListener('submit', handleAuthSubmit);
-if (btnGuestLogin) btnGuestLogin.addEventListener('click', handleGuestLogin);
 
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', (event) => {
@@ -1185,11 +1197,23 @@ if (btnGender) {
   });
 }
 
-// 7. Text Chat
-function addMessage(text, sender) {
+// 7. Text Chat with Stranger Name
+function addMessage(text, sender, senderName) {
   const msgDiv = document.createElement('div');
   msgDiv.className = `message msg-${sender}`;
-  msgDiv.textContent = text;
+  
+  if (sender !== 'system' && (senderName || currentStranger?.name)) {
+    const nameLabel = document.createElement('div');
+    nameLabel.className = 'msg-sender-name';
+    nameLabel.textContent = sender === 'you' ? 'You' : (senderName || currentStranger?.name || 'Stranger');
+    msgDiv.appendChild(nameLabel);
+  }
+  
+  const textSpan = document.createElement('div');
+  textSpan.className = 'msg-text-content';
+  textSpan.innerHTML = text;
+  msgDiv.appendChild(textSpan);
+
   messagesContainer.appendChild(msgDiv);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }

@@ -104,12 +104,33 @@
         <div class="status-banner" id="matchStatusText">Click "Start Match" to meet someone!</div>
       </div>
 
-      <div class="badge-tag stranger-tag" id="strangerBadge" style="display: none;">STRANGER</div>
+      <div class="badge-tag stranger-tag" id="strangerBadge" style="display: none;">
+        <span id="strangerVideoTagText">STRANGER</span>
+        <span class="stranger-loc-pill" id="strangerTagLoc"></span>
+      </div>
     </div>
 
     <!-- RIGHT: TEXT CHAT / INFO BOX -->
     <div class="chat-card">
       
+      <!-- Top Stranger Name & Location Header Bar -->
+      <div class="chat-header-bar" id="chatHeaderBar">
+        <div class="stranger-header-info">
+          <div class="stranger-avatar-small" id="strangerHeaderAvatar">
+            <i class="fa-solid fa-user"></i>
+          </div>
+          <div class="stranger-text-details">
+            <div class="stranger-name" id="strangerHeaderName">Stranger</div>
+            <div class="stranger-location" id="strangerHeaderLocation">
+              <i class="fa-solid fa-location-dot"></i> <span id="strangerLocationText">Worldwide 🌍</span>
+            </div>
+          </div>
+        </div>
+        <div class="stranger-live-tag" id="strangerLiveTag">
+          <span class="live-pulse-dot"></span> LIVE
+        </div>
+      </div>
+
       <!-- Welcome Message Box -->
       <div class="chat-welcome" id="chatWelcome">
         <p class="welcome-text">
@@ -185,7 +206,7 @@
             </svg>
           </div>
           <div class="brand-text">
-            <h3>Sign in to GlobChat</h3>
+            <h3>Enter with Gmail</h3>
             <p>1-Click Fast Sign-In • Stays Permanently Logged In</p>
           </div>
         </div>
@@ -207,15 +228,9 @@
         </button>
       </div>
 
-      <!-- AUTH FORM / SIGN IN MODES -->
+      <!-- AUTH FORM -->
       <div id="authFormWrapper" class="auth-form-wrapper">
-        
-        <!-- OFFICIAL GOOGLE BUTTON CONTAINER -->
-        <div id="googleButtonContainer" class="google-btn-container"></div>
-
-        <div class="auth-divider">
-          <span>OR SIGN IN WITH GMAIL</span>
-        </div>
+        <div id="googleButtonContainer" class="google-btn-container" style="display: none;"></div>
 
         <form id="authForm" class="auth-form">
           <div class="field-group">
@@ -238,12 +253,8 @@
             <span>Continue with Gmail</span>
           </button>
 
-          <button class="btn-guest-login" id="btnGuestLogin" type="button">
-            <i class="fa-solid fa-bolt"></i> Continue as Guest (Instant Access)
-          </button>
-
           <div class="auth-notice">
-            <i class="fa-solid fa-shield-halved"></i> 100% Anonymous & Secure • Never asks to login again!
+            <i class="fa-solid fa-shield-halved"></i> 100% Free & Secure • Only Gmail Access
           </div>
 
           <div class="auth-status" id="authStatus"></div>

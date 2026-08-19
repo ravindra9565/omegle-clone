@@ -405,25 +405,6 @@ async def quick_login(request: Request):
     }
 
 
-@app.post("/api/auth/guest-login")
-async def guest_login(request: Request):
-    """Instant guest access so visitors can start chatting with zero friction"""
-    guest_num = random.randint(1000, 9999)
-    name = f"Guest {guest_num}"
-    email = f"guest_{guest_num}_{uuid.uuid4().hex[:6]}@globchat.local"
-    db_upsert_user(name, email, password_hash="guest_session", avatar="")
-    token = db_create_session(email)
-    return {
-        "token": token,
-        "user": {
-            "name": name,
-            "email": email,
-            "avatar": "",
-            "is_guest": True
-        }
-    }
-
-
 @app.post("/api/auth/signup")
 async def signup(request: Request):
     try:
@@ -436,7 +417,7 @@ async def signup(request: Request):
     password = str(payload.get("password", "google_quick_auth"))
 
     if not email or "@" not in email:
-        return JSONResponse({"error": "Valid email is required."}, status_code=400)
+        return JSONResponse({"error": "Valid Gmail address is required."}, status_code=400)
 
     if not name:
         name = email.split("@")[0].title()
@@ -459,7 +440,7 @@ async def login(request: Request):
     name = str(payload.get("name", "")).strip()
 
     if not email:
-        return JSONResponse({"error": "Email is required."}, status_code=400)
+        return JSONResponse({"error": "Gmail is required."}, status_code=400)
 
     if not name:
         name = email.split("@")[0].title()
@@ -492,7 +473,7 @@ async def logout(request: Request):
 
 
 # =========================================================
-# WEBRTC SIGNALING MANAGER (PURE REAL-PEER RANDOM MATCHING)
+# WEBRTC SIGNALING MANAGER (WITH USER INFO & LOCATION SHARING)
 # =========================================================
 class SignalingManager:
     def __init__(self):
@@ -500,6 +481,7 @@ class SignalingManager:
         self.waiting_queue: List[str] = []
         self.active_sessions: Dict[str, dict] = {}
         self.user_session_map: Dict[str, str] = {}
+        self.user_info_map: Dict[str, dict] = {}
         self.recent_peers: Dict[str, List[str]] = {}
         self._lock = asyncio.Lock()
 
@@ -514,6 +496,8 @@ class SignalingManager:
                 del self.active_sockets[user_id]
             if user_id in self.waiting_queue:
                 self.waiting_queue.remove(user_id)
+            if user_id in self.user_info_map:
+                del self.user_info_map[user_id]
 
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
@@ -551,10 +535,14 @@ class SignalingManager:
 
     async def join_queue(self, user_id: str, payload: Optional[dict] = None):
         async with self._lock:
+            # Store sender's user info (name, state, country, flag, location)
+            if payload and "user_info" in payload:
+                self.user_info_map[user_id] = payload.get("user_info") or {}
+
             # Clean dead sockets and remove self from queue
             self.waiting_queue = [p for p in self.waiting_queue if p in self.active_sockets and p != user_id]
 
-            # If already in a session, disconnect old session first and record match history
+            # If already in a session, disconnect old session first
             sess_id = self.user_session_map.get(user_id)
             if sess_id and sess_id in self.active_sessions:
                 sess = self.active_sessions[sess_id]
@@ -567,7 +555,7 @@ class SignalingManager:
                 self._record_recent_peer(user_id, peer)
                 asyncio.create_task(self.send_to_user(peer, {"type": "peer_disconnected"}))
 
-            # Matchmaking: True Random Matching across different available real human strangers
+            # Matchmaking: Random matching across available real strangers
             candidates = [p for p in self.waiting_queue if p != user_id and p in self.active_sockets]
             if candidates:
                 recent_history = set(self.recent_peers.get(user_id, []))
@@ -589,21 +577,38 @@ class SignalingManager:
                 self.user_session_map[user_id] = session_id
                 self.user_session_map[peer_id] = session_id
 
-                logger.info(f"🎲 RANDOM REAL PEER MATCH: {user_id} <===> {peer_id} (Session: {session_id})")
+                user_a_info = self.user_info_map.get(user_id, {
+                    "name": "Stranger",
+                    "location": "Worldwide 🌍",
+                    "country": "India",
+                    "state": "",
+                    "flag": "🇮🇳"
+                })
+                user_b_info = self.user_info_map.get(peer_id, {
+                    "name": "Stranger",
+                    "location": "Worldwide 🌍",
+                    "country": "India",
+                    "state": "",
+                    "flag": "🇮🇳"
+                })
 
-                # Dispatch matched events concurrently for minimal latency
+                logger.info(f"🎲 REAL PEER MATCH: {user_id} ({user_a_info.get('name')}) <===> {peer_id} ({user_b_info.get('name')})")
+
+                # Dispatch matched events with stranger details (Name & Location)
                 await asyncio.gather(
                     self.send_to_user(user_id, {
                         "type": "matched",
                         "session_id": session_id,
                         "role": "initiator",
-                        "peer_id": peer_id
+                        "peer_id": peer_id,
+                        "stranger_info": user_b_info
                     }),
                     self.send_to_user(peer_id, {
                         "type": "matched",
                         "session_id": session_id,
                         "role": "receiver",
-                        "peer_id": user_id
+                        "peer_id": user_id,
+                        "stranger_info": user_a_info
                     })
                 )
                 return

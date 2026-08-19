@@ -358,6 +358,103 @@ body {
   position: relative;
 }
 
+/* Top Stranger Header Bar inside Chat Card */
+.chat-header-bar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.stranger-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stranger-avatar-small {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f97316, #ea580c);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stranger-text-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stranger-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stranger-location {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stranger-location i {
+  color: #ef4444;
+  font-size: 10px;
+}
+
+.stranger-live-tag {
+  background: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.live-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+  animation: pulseDot 1.4s infinite;
+}
+
+.stranger-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stranger-loc-pill {
+  font-size: 9px;
+  font-weight: 600;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.15);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
 .chat-welcome {
   display: flex;
   flex-direction: column;
@@ -391,7 +488,7 @@ body {
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  margin-top: 14px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -407,13 +504,25 @@ body {
   word-wrap: break-word;
 }
 
+.msg-sender-name {
+  font-size: 10px;
+  font-weight: 800;
+  margin-bottom: 2px;
+  opacity: 0.85;
+}
+
 .system-msg {
   align-self: center;
   background: #f8fafc;
-  color: #64748b;
-  font-size: 11px;
-  font-style: italic;
+  color: #475569;
+  font-size: 11.5px;
   border: 1px solid #e2e8f0;
+  text-align: center;
+  border-radius: 6px;
+}
+
+.system-msg strong {
+  color: #0f172a;
 }
 
 .msg-you {
