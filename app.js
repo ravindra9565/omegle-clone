@@ -535,21 +535,31 @@ async function loadCurrentUser() {
   initGoogleIdentity();
 }
 
-// Initialize Official Google Identity Services SDK
+// Initialize Official Google Identity Services SDK only if a real client ID is provided
 function initGoogleIdentity() {
+  const clientId = window.GOOGLE_CLIENT_ID || '';
+  const btnContainer = document.getElementById('googleButtonContainer');
+  const authDivider = document.querySelector('.auth-divider');
+
+  if (!clientId || clientId.includes('demo')) {
+    if (btnContainer) btnContainer.style.display = 'none';
+    if (authDivider) authDivider.style.display = 'none';
+    return;
+  }
+
   if (window.google && window.google.accounts && window.google.accounts.id) {
     try {
-      const clientId = window.GOOGLE_CLIENT_ID || '1047101377519-demo.apps.googleusercontent.com';
       window.google.accounts.id.initialize({
         client_id: clientId,
         callback: handleGoogleCredentialResponse,
-        auto_select: true,
-        cancel_on_tap_outside: false
+        auto_select: false,
+        cancel_on_tap_outside: true
       });
 
-      const btnContainer = document.getElementById('googleButtonContainer');
       if (btnContainer) {
+        btnContainer.style.display = 'flex';
         btnContainer.innerHTML = '';
+        if (authDivider) authDivider.style.display = 'flex';
         window.google.accounts.id.renderButton(btnContainer, {
           theme: 'filled_blue',
           size: 'large',
@@ -559,16 +569,9 @@ function initGoogleIdentity() {
           logo_alignment: 'left'
         });
       }
-
-      if (!currentUser) {
-        window.google.accounts.id.prompt();
-      }
     } catch (e) {
       console.warn('Google Identity initialization notice:', e);
     }
-  } else {
-    // Retry once SDK loads
-    setTimeout(initGoogleIdentity, 800);
   }
 }
 
@@ -585,6 +588,9 @@ async function handleGoogleCredentialResponse(response) {
     });
 
     saveStoredSession(result.user, result.token);
+    if (result.user.email) localStorage.setItem('globchat_last_email', result.user.email);
+    if (result.user.name) localStorage.setItem('globchat_last_name', result.user.name);
+
     renderProfile(result.user);
     if (authModal) authModal.style.display = 'none';
     if (authStatus) authStatus.textContent = '';
@@ -606,6 +612,16 @@ function openAuthModal() {
     if (authFormWrapper) authFormWrapper.style.display = 'block';
     if (authProfileBox) authProfileBox.style.display = 'none';
     if (btnCloseAuthModal) btnCloseAuthModal.style.display = 'none';
+
+    // Auto pre-fill last saved name & email
+    const lastEmail = localStorage.getItem('globchat_last_email') || 'ravindraprajapati6296@gmail.com';
+    const lastName = localStorage.getItem('globchat_last_name') || 'Ravindra';
+    if (authEmail && !authEmail.value && lastEmail) {
+      authEmail.value = lastEmail;
+    }
+    if (fullName && !fullName.value && lastName) {
+      fullName.value = lastName;
+    }
     initGoogleIdentity();
   }
 }
@@ -645,6 +661,9 @@ async function handleAuthSubmit(event) {
     });
 
     saveStoredSession(result.user, result.token);
+    localStorage.setItem('globchat_last_email', email);
+    if (name) localStorage.setItem('globchat_last_name', name);
+
     renderProfile(result.user);
     if (authForm) authForm.reset();
     if (authModal) authModal.style.display = 'none';
