@@ -27,6 +27,10 @@ Thumbs.db
 postgres_data/
 redis_data/
 
+# Databases
+*.db
+globchat.db
+
 # Local Certs & Keys
 *.pem
 certs/

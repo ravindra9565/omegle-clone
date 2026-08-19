@@ -57,6 +57,7 @@ def init_db():
                 email VARCHAR(255) PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
+                avatar TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -67,12 +68,18 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: ensure avatar column exists
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar TEXT DEFAULT ''")
+        except Exception:
+            pass
     else:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 email TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
+                avatar TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -84,6 +91,11 @@ def init_db():
                 FOREIGN KEY (email) REFERENCES users(email) ON DELETE CASCADE
             )
         """)
+        # Migration: ensure avatar column exists
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN avatar TEXT DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     logger.info("Database initialized successfully.")
@@ -96,36 +108,76 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.strip().encode("utf-8")).hexdigest()
 
 
+def decode_jwt_payload(jwt_str: str) -> dict:
+    """Safely decode JWT claims without external dependencies"""
+    import base64
+    try:
+        parts = jwt_str.strip().split(".")
+        if len(parts) < 2:
+            return {}
+        payload_b64 = parts[1]
+        rem = len(payload_b64) % 4
+        if rem > 0:
+            payload_b64 += "=" * (4 - rem)
+        payload_bytes = base64.urlsafe_b64decode(payload_b64.encode("utf-8"))
+        return json.loads(payload_bytes.decode("utf-8"))
+    except Exception as e:
+        logger.warning(f"Error decoding JWT payload: {e}")
+        return {}
+
+
 def db_get_user(email: str) -> Optional[dict]:
     conn = get_db_connection()
     cursor = conn.cursor()
     param = (email.lower().strip(),)
     if USE_POSTGRES:
-        cursor.execute("SELECT email, name, password_hash FROM users WHERE email = %s", param)
+        cursor.execute("SELECT email, name, password_hash, avatar FROM users WHERE email = %s", param)
     else:
-        cursor.execute("SELECT email, name, password_hash FROM users WHERE email = ?", param)
+        cursor.execute("SELECT email, name, password_hash, avatar FROM users WHERE email = ?", param)
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {"email": row[0], "name": row[1], "password_hash": row[2]}
+        return {
+            "email": row[0],
+            "name": row[1],
+            "password_hash": row[2],
+            "avatar": row[3] if len(row) > 3 and row[3] else ""
+        }
     return None
 
 
-def db_create_user(name: str, email: str, password_hash: str) -> bool:
+def db_upsert_user(name: str, email: str, password_hash: str = "google_auth", avatar: str = "") -> bool:
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        params = (email.lower().strip(), name.strip(), password_hash)
+        email_clean = email.lower().strip()
+        name_clean = name.strip()
+        avatar_clean = (avatar or "").strip()
+
         if USE_POSTGRES:
-            cursor.execute("INSERT INTO users (email, name, password_hash) VALUES (%s, %s, %s)", params)
+            cursor.execute("""
+                INSERT INTO users (email, name, password_hash, avatar) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (email) DO UPDATE 
+                SET name = EXCLUDED.name, avatar = CASE WHEN EXCLUDED.avatar != '' THEN EXCLUDED.avatar ELSE users.avatar END
+            """, (email_clean, name_clean, password_hash, avatar_clean))
         else:
-            cursor.execute("INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)", params)
+            cursor.execute("""
+                INSERT INTO users (email, name, password_hash, avatar) 
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(email) DO UPDATE 
+                SET name = excluded.name, avatar = CASE WHEN excluded.avatar != '' THEN excluded.avatar ELSE users.avatar END
+            """, (email_clean, name_clean, password_hash, avatar_clean))
         conn.commit()
         conn.close()
         return True
     except Exception as e:
-        logger.error(f"Error creating user: {e}")
+        logger.error(f"Error upserting user: {e}")
         return False
+
+
+def db_create_user(name: str, email: str, password_hash: str, avatar: str = "") -> bool:
+    return db_upsert_user(name, email, password_hash, avatar)
 
 
 def db_create_session(email: str) -> str:
@@ -149,12 +201,12 @@ def db_get_session_user(token: str) -> Optional[dict]:
     cursor = conn.cursor()
     params = (token.strip(),)
     query = """
-        SELECT u.email, u.name 
+        SELECT u.email, u.name, u.avatar 
         FROM sessions s 
         JOIN users u ON s.email = u.email 
         WHERE s.token = %s
     """ if USE_POSTGRES else """
-        SELECT u.email, u.name 
+        SELECT u.email, u.name, u.avatar 
         FROM sessions s 
         JOIN users u ON s.email = u.email 
         WHERE s.token = ?
@@ -163,7 +215,7 @@ def db_get_session_user(token: str) -> Optional[dict]:
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {"email": row[0], "name": row[1]}
+        return {"email": row[0], "name": row[1], "avatar": row[2] if len(row) > 2 and row[2] else ""}
     return None
 
 
@@ -189,6 +241,42 @@ def get_token_from_request(request: Request) -> Optional[str]:
 
 
 # =========================================================
+# ANTI-SLEEP KEEP-ALIVE SYSTEM
+# =========================================================
+async def keep_alive_worker():
+    """Background task that pings server to prevent free cloud hosting (Render/Glitch) from sleeping"""
+    import urllib.request
+    await asyncio.sleep(20)
+    logger.info("🛡️ Server Keep-Alive anti-sleep worker started.")
+
+    while True:
+        try:
+            external_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("KEEP_ALIVE_URL")
+            if external_url:
+                ping_url = external_url.rstrip("/") + "/healthz"
+                try:
+                    req = urllib.request.Request(
+                        ping_url,
+                        headers={"User-Agent": "GlobChat-AntiSleep-Daemon/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=12) as response:
+                        logger.info(f"💓 Keep-Alive ping to {ping_url} - Status: {response.getcode()}")
+                except Exception as ex:
+                    logger.debug(f"Keep-Alive ping notice: {ex}")
+        except Exception as e:
+            logger.debug(f"Keep-alive worker exception: {e}")
+
+        # Sleep for 9 minutes (Render free tier sleeps after 15 min idle)
+        await asyncio.sleep(540)
+
+
+@app.on_event("startup")
+async def on_startup():
+    init_db()
+    asyncio.create_task(keep_alive_worker())
+
+
+# =========================================================
 # REST API ENDPOINTS & HEALTH CHECKS
 # =========================================================
 @app.get("/healthz")
@@ -196,7 +284,7 @@ def get_token_from_request(request: Request) -> Optional[str]:
 @app.head("/healthz")
 @app.head("/")
 async def health_check():
-    return {"status": "ok", "service": "globchat"}
+    return {"status": "ok", "service": "globchat", "active_users": len(manager.active_sockets)}
 
 
 @app.get("/api/online")
@@ -205,8 +293,88 @@ async def get_online_count():
     return {"online": count}
 
 
+@app.post("/api/auth/google")
+async def google_auth(request: Request):
+    """Authenticate with Google Identity Services / One-Tap JWT credential"""
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request payload."}, status_code=400)
+
+    credential = payload.get("credential")
+    email = str(payload.get("email", "")).strip().lower()
+    name = str(payload.get("name", "")).strip()
+    avatar = str(payload.get("avatar") or payload.get("picture", "")).strip()
+
+    if credential:
+        claims = decode_jwt_payload(credential)
+        if claims.get("email"):
+            email = claims.get("email").strip().lower()
+        if claims.get("name"):
+            name = claims.get("name").strip()
+        if claims.get("picture"):
+            avatar = claims.get("picture").strip()
+
+    if not email:
+        return JSONResponse({"error": "Google email verification failed."}, status_code=400)
+    if not name:
+        name = email.split("@")[0].replace(".", " ").title()
+
+    db_upsert_user(name, email, password_hash="google_oauth_jwt", avatar=avatar)
+    token = db_create_session(email)
+    user = db_get_user(email) or {"name": name, "email": email, "avatar": avatar}
+    return {
+        "token": token,
+        "user": {
+            "name": user.get("name", name),
+            "email": email,
+            "avatar": user.get("avatar", avatar)
+        }
+    }
+
+
+@app.post("/api/auth/auto-login")
+async def auto_login(request: Request):
+    """Seamless background authentication for returning users - never blocks on restart"""
+    token = get_token_from_request(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    email = str(payload.get("email", "")).strip().lower()
+    name = str(payload.get("name", "")).strip()
+    avatar = str(payload.get("avatar", "")).strip()
+
+    # 1. If valid session token exists in DB
+    if token:
+        user = db_get_session_user(token)
+        if user:
+            return {"token": token, "user": user}
+
+    # 2. If token is missing/expired (e.g. server woke up or restarted), auto-restore via stored profile
+    if email and "@" in email:
+        if not name:
+            name = email.split("@")[0].replace(".", " ").title()
+
+        db_upsert_user(name, email, avatar=avatar)
+        user = db_get_user(email) or {"name": name, "email": email, "avatar": avatar}
+        new_token = db_create_session(email)
+        return {
+            "token": new_token,
+            "user": {
+                "name": user.get("name", name),
+                "email": email,
+                "avatar": user.get("avatar", avatar)
+            }
+        }
+
+    return JSONResponse({"error": "No persistent session found."}, status_code=401)
+
+
 @app.post("/api/auth/quick-login")
 async def quick_login(request: Request):
+    """1-Click Gmail login with persistent auto-account creation"""
     try:
         payload = await request.json()
     except Exception:
@@ -214,6 +382,7 @@ async def quick_login(request: Request):
 
     email = str(payload.get("email", "")).strip().lower()
     name = str(payload.get("name", "")).strip()
+    avatar = str(payload.get("avatar", "")).strip()
 
     if not email:
         return JSONResponse({"error": "Gmail / Email address is required."}, status_code=400)
@@ -223,18 +392,36 @@ async def quick_login(request: Request):
     if not name:
         name = email.split("@")[0].replace(".", " ").title()
 
-    # If user already exists in database, fetch user
-    user = db_get_user(email)
-    if not user:
-        created = db_create_user(name, email, "google_quick_auth")
-        if not created:
-            # Fallback if already exists
-            user = db_get_user(email)
-    else:
-        name = user.get("name") or name
-
+    db_upsert_user(name, email, password_hash="google_quick_auth", avatar=avatar)
     token = db_create_session(email)
-    return {"token": token, "user": {"name": name, "email": email}}
+    user = db_get_user(email) or {"name": name, "email": email, "avatar": avatar}
+    return {
+        "token": token,
+        "user": {
+            "name": user.get("name", name),
+            "email": email,
+            "avatar": user.get("avatar", avatar)
+        }
+    }
+
+
+@app.post("/api/auth/guest-login")
+async def guest_login(request: Request):
+    """Instant guest access so visitors can start chatting with zero friction"""
+    guest_num = random.randint(1000, 9999)
+    name = f"Guest {guest_num}"
+    email = f"guest_{guest_num}_{uuid.uuid4().hex[:6]}@globchat.local"
+    db_upsert_user(name, email, password_hash="guest_session", avatar="")
+    token = db_create_session(email)
+    return {
+        "token": token,
+        "user": {
+            "name": name,
+            "email": email,
+            "avatar": "",
+            "is_guest": True
+        }
+    }
 
 
 @app.post("/api/auth/signup")
@@ -248,23 +435,17 @@ async def signup(request: Request):
     email = str(payload.get("email", "")).strip().lower()
     password = str(payload.get("password", "google_quick_auth"))
 
-    if not email:
-        return JSONResponse({"error": "Email is required."}, status_code=400)
-    if "@" not in email or "." not in email:
-        return JSONResponse({"error": "Please enter a valid email address."}, status_code=400)
+    if not email or "@" not in email:
+        return JSONResponse({"error": "Valid email is required."}, status_code=400)
 
     if not name:
         name = email.split("@")[0].title()
 
-    existing_user = db_get_user(email)
-    if existing_user:
-        token = db_create_session(email)
-        return {"token": token, "user": {"name": existing_user["name"], "email": existing_user["email"]}}
-
     pwd_hash = hash_password(password)
-    db_create_user(name, email, pwd_hash)
+    db_upsert_user(name, email, pwd_hash)
     token = db_create_session(email)
-    return {"token": token, "user": {"name": name, "email": email}}
+    user = db_get_user(email) or {"name": name, "email": email, "avatar": ""}
+    return {"token": token, "user": {"name": user.get("name", name), "email": email, "avatar": user.get("avatar", "")}}
 
 
 @app.post("/api/auth/login")
@@ -283,12 +464,10 @@ async def login(request: Request):
     if not name:
         name = email.split("@")[0].title()
 
-    user = db_get_user(email)
-    if not user:
-        db_create_user(name, email, "google_quick_auth")
-
+    db_upsert_user(name, email, "google_quick_auth")
     token = db_create_session(email)
-    return {"token": token, "user": {"name": name, "email": email}}
+    user = db_get_user(email) or {"name": name, "email": email, "avatar": ""}
+    return {"token": token, "user": {"name": user.get("name", name), "email": email, "avatar": user.get("avatar", "")}}
 
 
 @app.get("/api/auth/me")
@@ -301,7 +480,7 @@ async def get_profile(request: Request):
     if not user:
         return JSONResponse({"error": "Session expired or user not found."}, status_code=401)
 
-    return {"user": {"name": user["name"], "email": user["email"]}}
+    return {"user": user}
 
 
 @app.post("/api/auth/logout")
@@ -475,7 +654,11 @@ async def websocket_endpoint(
             event_type = data.get("type")
             payload = data.get("data", {})
 
-            if event_type == "join_queue":
+            if event_type == "ping":
+                await websocket.send_text(json.dumps({"type": "pong", "timestamp": payload.get("timestamp")}))
+                continue
+
+            elif event_type == "join_queue":
                 await manager.join_queue(user_id, payload)
 
             elif event_type in ("next", "skip"):
@@ -499,12 +682,6 @@ async def websocket_endpoint(
                     await manager.send_to_user(peer, msg_out)
                     if event_type == "message":
                         await manager.send_to_user(user_id, msg_out)
-
-    except WebSocketDisconnect:
-        await manager.disconnect(user_id)
-    except Exception as e:
-        logger.error(f"WebSocket error for {user_id}: {e}")
-        await manager.disconnect(user_id)
 
     except WebSocketDisconnect:
         await manager.disconnect(user_id)

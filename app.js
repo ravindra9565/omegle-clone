@@ -27,6 +27,7 @@ const RTC_CONFIG = {
 };
 
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat';
+const SESSION_STORAGE_KEY = 'globchat_persistent_session';
 
 // State
 let localStream = null;
@@ -38,18 +39,20 @@ let sessionId = null;
 let peerId = null;
 let isMatching = false;
 let isConnected = false;
-let isAutoMatching = false; // When started, auto-match keeps running continuously
+let isAutoMatching = false;
 let isMuted = false;
 let isCamOff = false;
 let pendingCandidates = [];
 let audioCtx = null;
 let autoNextTimer = null;
+let pingIntervalTimer = null;
+let keepAliveHttpTimer = null;
+let reconnectTimer = null;
 
 // DOM Elements
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
 const remoteAudio = document.getElementById('remoteAudio');
-const remoteCanvas = document.getElementById('remoteCanvas');
 
 const localOverlay = document.getElementById('localOverlay');
 const strangerPlaceholder = document.getElementById('strangerPlaceholder');
@@ -57,6 +60,8 @@ const matchStatusText = document.getElementById('matchStatusText');
 const strangerBadge = document.getElementById('strangerBadge');
 const onlineCount = document.getElementById('onlineCount');
 const micStatusIndicator = document.getElementById('micStatusIndicator');
+const serverStatusBanner = document.getElementById('serverStatusBanner');
+const serverStatusText = document.getElementById('serverStatusText');
 
 const btnStartMatch = document.getElementById('btnStartMatch');
 const startBtnText = document.getElementById('startBtnText');
@@ -75,29 +80,29 @@ const btnCloseModal = document.getElementById('btnCloseModal');
 const btnFreeMatch = document.getElementById('btnFreeMatch');
 const btnStore = document.getElementById('btnStore');
 const profileAvatar = document.getElementById('profileAvatar');
+const navAvatarImgContainer = document.getElementById('navAvatarImgContainer');
+const navUserText = document.getElementById('navUserText');
+
 const authModal = document.getElementById('authModal');
 const btnCloseAuthModal = document.getElementById('btnCloseAuthModal');
-const authModalTitle = document.getElementById('authModalTitle');
-const authForm = document.getElementById('authForm');
-const authStatus = document.getElementById('authStatus');
-const authEmail = document.getElementById('authEmail');
-const authPassword = document.getElementById('authPassword');
-const fullName = document.getElementById('fullName');
-const nameField = document.getElementById('nameField');
-const authSubmitBtn = document.getElementById('authSubmitBtn');
-const authSwitchText = document.getElementById('authSwitchText');
-const btnToggleAuthMode = document.getElementById('btnToggleAuthMode');
-const btnLogout = document.getElementById('btnLogout');
 const authProfileBox = document.getElementById('authProfileBox');
 const profileNameText = document.getElementById('profileNameText');
 const profileEmailText = document.getElementById('profileEmailText');
 const profileAvatarLarge = document.getElementById('profileAvatarLarge');
-const authTabs = document.querySelectorAll('.auth-tab');
+const btnLogout = document.getElementById('btnLogout');
+const authFormWrapper = document.getElementById('authFormWrapper');
+const authForm = document.getElementById('authForm');
+const fullName = document.getElementById('fullName');
+const authEmail = document.getElementById('authEmail');
+const authSubmitBtn = document.getElementById('authSubmitBtn');
+const btnGuestLogin = document.getElementById('btnGuestLogin');
+const authStatus = document.getElementById('authStatus');
 
 let currentUser = null;
-let authMode = 'login';
 
-// Matchmaking UI State Manager
+// =========================================================
+// MATCHMAKING UI STATE
+// =========================================================
 function updateMatchUIState(state) {
   if (state === 'searching') {
     if (startBtnText) startBtnText.textContent = 'Searching...';
@@ -132,16 +137,16 @@ function updateMatchUIState(state) {
 
 async function fetchOnlineUsers() {
   try {
-    const response = await fetch('/api/online');
+    const response = await fetch('/api/online', { cache: 'no-store' });
     const data = await response.json();
-    const count = Number(data?.online || 0);
+    const count = Number(data?.online || 1);
     if (onlineCount) onlineCount.textContent = count.toLocaleString();
   } catch (err) {
-    if (onlineCount) onlineCount.textContent = '0';
+    if (onlineCount) onlineCount.textContent = '1';
   }
 }
 
-setInterval(fetchOnlineUsers, 10000);
+setInterval(fetchOnlineUsers, 8000);
 fetchOnlineUsers();
 
 // Insecure context warning for mobile browsers on HTTP
@@ -149,7 +154,7 @@ function checkSecureContext() {
   const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   if (!window.isSecureContext && !isLocalhost) {
     console.warn('⚠️ Insecure Context: Mobile browsers block camera/mic over HTTP on LAN IPs.');
-    showToast('⚠️ Mobile Notice: Camera/Mic requires HTTPS or a secure tunnel (e.g. Cloudflare/Untun).');
+    showToast('⚠️ Mobile Notice: Camera/Mic requires HTTPS or a secure tunnel.');
   }
 }
 
@@ -192,17 +197,14 @@ function createFallbackVideoStream() {
 
 function applyAudioTrackSettings(track) {
   if (!track || typeof track.applyConstraints !== 'function') return;
-
-  const constraints = {
+  track.applyConstraints({
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true
-  };
-
-  track.applyConstraints(constraints).catch(() => {});
+  }).catch(() => {});
 }
 
-// 1. Initialize Local Camera and Microphone (Robust Step-by-Step Mobile Fallback)
+// 1. Initialize Local Camera and Microphone
 async function initLocalCamera() {
   if (localStream && localStream.getTracks().length > 0) {
     const hasLiveVideo = localStream.getVideoTracks().some(t => t.readyState === 'live');
@@ -225,17 +227,16 @@ async function initLocalCamera() {
           break;
         }
       } catch (err) {
-        console.warn('getUserMedia attempt failed for config:', config, err.name, err.message);
+        console.warn('getUserMedia attempt failed for config:', config, err.name);
       }
     }
 
-    // If audio is missing, try adding audio separately
     if (localStream && localStream.getAudioTracks().length === 0) {
       try {
         const audioOnlyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioOnlyStream.getAudioTracks().forEach(t => localStream.addTrack(t));
       } catch (ea) {
-        console.warn('Audio-only fallback failed:', ea);
+        console.warn('Audio-only fallback notice:', ea);
       }
     }
 
@@ -249,7 +250,7 @@ async function initLocalCamera() {
       });
 
       localVideo.srcObject = localStream;
-      localVideo.muted = true; // Local preview is always muted to prevent self-echo
+      localVideo.muted = true;
       localVideo.playsInline = true;
       localVideo.setAttribute('playsinline', '');
       localVideo.setAttribute('webkit-playsinline', '');
@@ -260,7 +261,7 @@ async function initLocalCamera() {
     }
   }
 
-  // Fallback stream if camera is busy, denied or unsupported on plain HTTP
+  // Fallback stream if camera is busy or denied
   console.warn('Falling back to animated canvas video stream.');
   localStream = createFallbackVideoStream();
   localVideo.srcObject = localStream;
@@ -286,7 +287,6 @@ function updateMicIndicator(active) {
   }
 }
 
-// Ensure Camera and Microphone Tracks are Attached
 async function ensureMicrophoneTrack() {
   if (!localStream) {
     await initLocalCamera();
@@ -294,9 +294,26 @@ async function ensureMicrophoneTrack() {
   return localStream;
 }
 
-// 2. Connect WebSocket
+// =========================================================
+// 2. WEBSOCKET & ANTI-SLEEP KEEP-ALIVE SYSTEM
+// =========================================================
 const userId = 'user_' + Math.random().toString(36).substring(2, 9);
 const socketId = 'soc_' + Math.random().toString(36).substring(2, 9);
+
+function showServerStatus(text, isError = false) {
+  if (!serverStatusBanner) return;
+  serverStatusBanner.style.display = 'flex';
+  if (serverStatusText) serverStatusText.textContent = text;
+  if (isError) {
+    serverStatusBanner.classList.add('error');
+  } else {
+    serverStatusBanner.classList.remove('error');
+  }
+}
+
+function hideServerStatus() {
+  if (serverStatusBanner) serverStatusBanner.style.display = 'none';
+}
 
 function connectWebSocket() {
   const wsEndpoint = WS_URL + `?user_id=${userId}&socket_id=${socketId}`;
@@ -306,11 +323,23 @@ function connectWebSocket() {
 
     socket.onopen = () => {
       console.log('✅ WebSocket connected. User:', userId);
+      hideServerStatus();
+      clearInterval(pingIntervalTimer);
+
+      // WebSocket Heartbeat Ping every 20s to prevent reverse-proxy timeout
+      pingIntervalTimer = setInterval(() => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'ping', data: { timestamp: Date.now() } }));
+        }
+      }, 20000);
     };
 
     socket.onmessage = async (event) => {
       try {
         const payload = JSON.parse(event.data);
+        if (payload.type === 'pong') {
+          return; // Heartbeat ack received
+        }
         await handleSignalEvent(payload);
       } catch (e) {
         console.error('Signal parse error:', e);
@@ -318,12 +347,34 @@ function connectWebSocket() {
     };
 
     socket.onclose = () => {
-      setTimeout(connectWebSocket, 1500);
+      clearInterval(pingIntervalTimer);
+      showServerStatus('⚡ Server sleeping or reconnecting... Re-establishing connection...');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectWebSocket, 2000);
+    };
+
+    socket.onerror = () => {
+      showServerStatus('⚡ Connecting to GlobChat server...');
     };
   } catch (e) {
-    console.warn('WebSocket error:', e);
+    console.warn('WebSocket init notice:', e);
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectWebSocket, 2500);
   }
 }
+
+// Client HTTP Keep-Alive Ping every 3 minutes while browser tab is open
+function startHttpKeepAlive() {
+  clearInterval(keepAliveHttpTimer);
+  keepAliveHttpTimer = setInterval(async () => {
+    try {
+      await fetch('/healthz', { cache: 'no-store' });
+    } catch (e) {
+      console.debug('Keep-alive ping attempt:', e);
+    }
+  }, 180000);
+}
+startHttpKeepAlive();
 
 function showToast(message) {
   const container = document.getElementById('toastContainer');
@@ -334,15 +385,48 @@ function showToast(message) {
   container.appendChild(toast);
   setTimeout(() => {
     toast.remove();
-  }, 2200);
+  }, 2500);
 }
 
-function getAuthToken() {
-  return localStorage.getItem('omegle_auth_token') || '';
+// =========================================================
+// 3. PERSISTENT AUTHENTICATION & GOOGLE SIGN-IN
+// =========================================================
+function getStoredSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (session && (session.token || session.user)) {
+      return session;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function saveStoredSession(user, token) {
+  try {
+    const sessionData = {
+      user: user,
+      token: token || '',
+      savedAt: Date.now()
+    };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData));
+    localStorage.setItem('omegle_auth_token', token || '');
+  } catch (e) {
+    console.warn('Failed to persist session to localStorage:', e);
+  }
+}
+
+function clearStoredSession() {
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    localStorage.removeItem('omegle_auth_token');
+  } catch (e) {}
 }
 
 async function apiFetch(url, options = {}) {
-  const token = getAuthToken();
+  const session = getStoredSession();
+  const token = session?.token || localStorage.getItem('omegle_auth_token') || '';
   const headers = {
     'Content-Type': 'application/json',
     ...(options.headers || {})
@@ -365,62 +449,149 @@ async function apiFetch(url, options = {}) {
   return data;
 }
 
-function setAuthMode(mode) {
-  authMode = mode;
-  const isSignup = mode === 'signup';
-  authTabs.forEach(tab => {
-    tab.classList.toggle('active', tab.dataset.authTab === mode);
-  });
-  if (authModalTitle) {
-    authModalTitle.textContent = isSignup ? 'Create Your Account' : 'Welcome Back';
-  }
-  if (nameField) nameField.style.display = isSignup ? 'flex' : 'none';
-  if (authSubmitBtn) authSubmitBtn.textContent = isSignup ? 'Create Account' : 'Login';
-  if (authSwitchText) {
-    authSwitchText.textContent = isSignup ? 'Already have an account?' : "Don't have an account?";
-  }
-  if (btnToggleAuthMode) {
-    btnToggleAuthMode.textContent = isSignup ? 'Login' : 'Sign Up';
-  }
-  if (authStatus) authStatus.textContent = '';
-}
-
 function renderProfile(user) {
   currentUser = user || null;
+  
   if (!user) {
-    profileAvatar.innerHTML = '<i class="fa-solid fa-circle-user"></i> <span id="navUserText">Login</span>';
-    profileAvatar.style.background = '#2563eb';
-    authProfileBox.style.display = 'none';
+    if (navAvatarImgContainer) {
+      navAvatarImgContainer.innerHTML = '<i class="fa-solid fa-circle-user"></i>';
+    }
+    if (navUserText) navUserText.textContent = 'Login';
+    if (profileAvatar) {
+      profileAvatar.style.background = '#2563eb';
+    }
+    if (authProfileBox) authProfileBox.style.display = 'none';
+    if (authFormWrapper) authFormWrapper.style.display = 'block';
     return;
   }
 
-  const name = user.name || user.email.split('@')[0] || 'User';
-  const letters = (user.name || user.email || 'U').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase();
-  profileAvatar.innerHTML = `<i class="fa-solid fa-user-check"></i> <span id="navUserText">${name}</span>`;
-  profileAvatar.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-  profileAvatarLarge.textContent = letters;
-  profileNameText.textContent = user.name || 'User';
-  profileEmailText.textContent = user.email || '';
-  authProfileBox.style.display = 'flex';
+  const name = user.name || user.email?.split('@')[0] || 'User';
+  const email = user.email || '';
+  const avatarUrl = user.avatar || '';
+
+  // Update Navbar Profile
+  if (navUserText) navUserText.textContent = name;
+  if (profileAvatar) {
+    profileAvatar.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+  }
+  if (navAvatarImgContainer) {
+    if (avatarUrl && avatarUrl.startsWith('http')) {
+      navAvatarImgContainer.innerHTML = `<img src="${avatarUrl}" alt="${name}" class="nav-avatar-photo" onerror="this.outerHTML='<i class=\\\'fa-solid fa-user-check\\\'></i>'" />`;
+    } else {
+      navAvatarImgContainer.innerHTML = '<i class="fa-solid fa-user-check"></i>';
+    }
+  }
+
+  // Update Auth Modal Profile Box
+  if (profileNameText) profileNameText.textContent = name;
+  if (profileEmailText) profileEmailText.textContent = email;
+  if (profileAvatarLarge) {
+    if (avatarUrl && avatarUrl.startsWith('http')) {
+      profileAvatarLarge.innerHTML = `<img src="${avatarUrl}" alt="${name}" class="large-avatar-photo" onerror="this.outerHTML='${name.charAt(0).toUpperCase()}'" />`;
+    } else {
+      const initials = (name || 'U').split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase();
+      profileAvatarLarge.textContent = initials;
+    }
+  }
+
+  if (authProfileBox) authProfileBox.style.display = 'flex';
+  if (authFormWrapper) authFormWrapper.style.display = 'none';
 }
 
+// Silent, non-blocking auto-login on load
 async function loadCurrentUser() {
-  const token = getAuthToken();
-  if (!token) {
-    renderProfile(null);
-    openAuthModal();
+  const session = getStoredSession();
+
+  if (session && session.user) {
+    // Instantly apply user credentials from permanent localStorage
+    renderProfile(session.user);
+    if (authModal) authModal.style.display = 'none';
+    initLocalCamera();
+
+    // Verify & refresh session in background without disrupting UI
+    try {
+      const result = await apiFetch('/api/auth/auto-login', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: session.user.email,
+          name: session.user.name,
+          avatar: session.user.avatar || ''
+        })
+      });
+
+      if (result && result.user) {
+        saveStoredSession(result.user, result.token);
+        renderProfile(result.user);
+      }
+    } catch (e) {
+      console.debug('Background session sync notice:', e);
+    }
     return;
   }
 
+  // No saved session -> Open modal & initialize Google Sign-In
+  renderProfile(null);
+  openAuthModal();
+  initGoogleIdentity();
+}
+
+// Initialize Official Google Identity Services SDK
+function initGoogleIdentity() {
+  if (window.google && window.google.accounts && window.google.accounts.id) {
+    try {
+      const clientId = window.GOOGLE_CLIENT_ID || '1047101377519-demo.apps.googleusercontent.com';
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredentialResponse,
+        auto_select: true,
+        cancel_on_tap_outside: false
+      });
+
+      const btnContainer = document.getElementById('googleButtonContainer');
+      if (btnContainer) {
+        btnContainer.innerHTML = '';
+        window.google.accounts.id.renderButton(btnContainer, {
+          theme: 'filled_blue',
+          size: 'large',
+          shape: 'rectangular',
+          width: 320,
+          text: 'continue_with',
+          logo_alignment: 'left'
+        });
+      }
+
+      if (!currentUser) {
+        window.google.accounts.id.prompt();
+      }
+    } catch (e) {
+      console.warn('Google Identity initialization notice:', e);
+    }
+  } else {
+    // Retry once SDK loads
+    setTimeout(initGoogleIdentity, 800);
+  }
+}
+
+// Handle Official Google JWT Credential Response
+async function handleGoogleCredentialResponse(response) {
+  if (!response || !response.credential) return;
+
+  if (authStatus) authStatus.textContent = 'Logging in with Google...';
+
   try {
-    const data = await apiFetch('/api/auth/me');
-    renderProfile(data.user);
+    const result = await apiFetch('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential: response.credential })
+    });
+
+    saveStoredSession(result.user, result.token);
+    renderProfile(result.user);
     if (authModal) authModal.style.display = 'none';
+    if (authStatus) authStatus.textContent = '';
     initLocalCamera();
+    showToast(`🎉 Signed in as ${result.user.name}!`);
   } catch (error) {
-    localStorage.removeItem('omegle_auth_token');
-    renderProfile(null);
-    openAuthModal();
+    if (authStatus) authStatus.textContent = error.message || 'Google sign-in failed.';
   }
 }
 
@@ -428,20 +599,20 @@ function openAuthModal() {
   if (!authModal) return;
   authModal.style.display = 'flex';
   if (currentUser) {
-    authForm.style.display = 'none';
-    authProfileBox.style.display = 'flex';
+    if (authFormWrapper) authFormWrapper.style.display = 'none';
+    if (authProfileBox) authProfileBox.style.display = 'flex';
     if (btnCloseAuthModal) btnCloseAuthModal.style.display = 'flex';
   } else {
-    authForm.style.display = 'flex';
-    authProfileBox.style.display = 'none';
+    if (authFormWrapper) authFormWrapper.style.display = 'block';
+    if (authProfileBox) authProfileBox.style.display = 'none';
     if (btnCloseAuthModal) btnCloseAuthModal.style.display = 'none';
-    setAuthMode('login');
+    initGoogleIdentity();
   }
 }
 
 function closeAuthModal() {
   if (!currentUser) {
-    showToast('⚠️ Please login or signup first to access GlobChat.');
+    showToast('⚠️ Please login or continue as guest to start chatting.');
     return;
   }
   if (authModal) authModal.style.display = 'none';
@@ -454,17 +625,17 @@ async function handleAuthSubmit(event) {
   const email = authEmail ? authEmail.value.trim() : '';
 
   if (!email) {
-    authStatus.textContent = 'Please enter your Gmail / Email address.';
+    if (authStatus) authStatus.textContent = 'Please enter your Gmail / Email address.';
     return;
   }
   if (!email.includes('@') || !email.includes('.')) {
-    authStatus.textContent = 'Please enter a valid Gmail address (e.g. name@gmail.com).';
+    if (authStatus) authStatus.textContent = 'Please enter a valid Gmail address (e.g. name@gmail.com).';
     return;
   }
 
   if (authSubmitBtn) {
     authSubmitBtn.disabled = true;
-    authSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Connecting...</span>';
+    authSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Signing In...</span>';
   }
 
   try {
@@ -473,17 +644,16 @@ async function handleAuthSubmit(event) {
       body: JSON.stringify({ name: name || email.split('@')[0], email: email })
     });
 
-    localStorage.setItem('omegle_auth_token', result.token);
+    saveStoredSession(result.user, result.token);
     renderProfile(result.user);
     if (authForm) authForm.reset();
     if (authModal) authModal.style.display = 'none';
     if (authStatus) authStatus.textContent = '';
     
-    // Start camera immediately on successful login
     initLocalCamera();
-    showToast(`🎉 Welcome, ${result.user.name}! Click "Start Match" to meet strangers.`);
+    showToast(`🎉 Welcome, ${result.user.name}! You are permanently signed in.`);
   } catch (error) {
-    authStatus.textContent = error.message || 'Login failed. Please try again.';
+    if (authStatus) authStatus.textContent = error.message || 'Login failed. Please try again.';
   } finally {
     if (authSubmitBtn) {
       authSubmitBtn.disabled = false;
@@ -500,13 +670,37 @@ async function handleAuthSubmit(event) {
   }
 }
 
+async function handleGuestLogin() {
+  if (btnGuestLogin) {
+    btnGuestLogin.disabled = true;
+    btnGuestLogin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Creating Guest Session...</span>';
+  }
+
+  try {
+    const result = await apiFetch('/api/auth/guest-login', { method: 'POST' });
+    saveStoredSession(result.user, result.token);
+    renderProfile(result.user);
+    if (authModal) authModal.style.display = 'none';
+    if (authStatus) authStatus.textContent = '';
+    initLocalCamera();
+    showToast(`⚡ Connected as ${result.user.name}! Click "Start Match" to chat.`);
+  } catch (error) {
+    if (authStatus) authStatus.textContent = error.message || 'Guest login failed.';
+  } finally {
+    if (btnGuestLogin) {
+      btnGuestLogin.disabled = false;
+      btnGuestLogin.innerHTML = '<i class="fa-solid fa-bolt"></i> Continue as Guest (Instant Access)';
+    }
+  }
+}
+
 async function handleLogout() {
   try {
     await apiFetch('/api/auth/logout', { method: 'POST' });
   } catch (error) {
-    console.warn('Logout request failed:', error);
+    console.warn('Logout request notice:', error);
   } finally {
-    localStorage.removeItem('omegle_auth_token');
+    clearStoredSession();
     currentUser = null;
     renderProfile(null);
     if (localStream) {
@@ -518,32 +712,30 @@ async function handleLogout() {
       peerConnection = null;
     }
     updateMatchUIState('idle');
-    setAuthMode('login');
     openAuthModal();
     showToast('Logged out successfully.');
   }
 }
 
-// 4. Safe ICE Candidate Queue & Drainage
+// =========================================================
+// 4. WEBRTC SIGNALING & PEER CONNECTION
+// =========================================================
 async function addIceCandidateSafely(candidate) {
   if (!candidate || (!candidate.candidate && typeof candidate !== 'string')) return;
   
   if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
     try {
       await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      console.log('❄️ Added ICE candidate directly');
     } catch (e) {
       console.warn('addIceCandidate error:', e);
     }
   } else {
     pendingCandidates.push(candidate);
-    console.log('⏳ Queued ICE candidate. Pending count:', pendingCandidates.length);
   }
 }
 
 async function drainPendingIceCandidates() {
   if (!peerConnection || !peerConnection.remoteDescription) return;
-  console.log(`🚀 Draining ${pendingCandidates.length} pending ICE candidates...`);
   while (pendingCandidates.length > 0) {
     const cand = pendingCandidates.shift();
     try {
@@ -556,7 +748,6 @@ async function drainPendingIceCandidates() {
   }
 }
 
-// 3. Handle Signaling Events
 async function handleSignalEvent(payload) {
   const { type, session_id, role, sdp, candidate, text, is_typing, peer_id } = payload;
 
@@ -643,7 +834,7 @@ async function handleSignalEvent(payload) {
       break;
 
     case 'typing':
-      typingIndicator.style.display = is_typing ? 'block' : 'none';
+      if (typingIndicator) typingIndicator.style.display = is_typing ? 'block' : 'none';
       break;
 
     case 'stopped':
@@ -657,7 +848,6 @@ async function handleSignalEvent(payload) {
   }
 }
 
-// 5. Setup WebRTC Peer Connection (Ultra-Fast Sub-Second Connection Pipeline)
 async function setupPeerConnection(isInitiator) {
   if (peerConnection) {
     try {
@@ -669,7 +859,6 @@ async function setupPeerConnection(isInitiator) {
   const initPromise = (async () => {
     peerConnection = new RTCPeerConnection(RTC_CONFIG);
 
-    // Attach local audio and video tracks directly (reuses active stream for 0ms delay)
     const stream = await ensureMicrophoneTrack();
     if (stream) {
       stream.getTracks().forEach(track => {
@@ -679,14 +868,12 @@ async function setupPeerConnection(isInitiator) {
             applyAudioTrackSettings(track);
           }
           peerConnection.addTrack(track, stream);
-          console.log(`🎤 Attached track: ${track.kind}`);
         } catch (e) {
           console.warn(`Failed to add ${track.kind} track:`, e);
         }
       });
     }
 
-    // Ensure recv transceivers if any media kind is missing locally
     try {
       const senders = peerConnection.getSenders();
       const hasAudio = senders.some(s => s.track && s.track.kind === 'audio');
@@ -696,9 +883,8 @@ async function setupPeerConnection(isInitiator) {
       if (!hasVideo) peerConnection.addTransceiver('video', { direction: 'recvonly' });
     } catch (e) {}
 
-    // Native ontrack: Attach stream to remoteVideo & remoteAudio with automatic play fallback
     peerConnection.ontrack = (event) => {
-      console.log('🎥 WebRTC Track received:', event.track.kind, 'Track ID:', event.track.id);
+      console.log('🎥 WebRTC Track received:', event.track.kind);
 
       let incomingStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
       if (!incomingStream) {
@@ -717,7 +903,7 @@ async function setupPeerConnection(isInitiator) {
         if (remoteVideo.srcObject !== incomingStream) {
           remoteVideo.srcObject = incomingStream;
         }
-        remoteVideo.muted = true; // Prevents browser autoplay blocking
+        remoteVideo.muted = true;
         remoteVideo.playsInline = true;
         remoteVideo.setAttribute('playsinline', '');
         remoteVideo.setAttribute('webkit-playsinline', '');
@@ -728,12 +914,10 @@ async function setupPeerConnection(isInitiator) {
           const p = remoteVideo.play();
           if (p !== undefined) {
             p.then(() => {
-              console.log('✅ Remote video playing live stream');
               if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
               if (strangerBadge) strangerBadge.style.display = 'block';
               if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
             }).catch(err => {
-              console.warn('remoteVideo play catch:', err);
               remoteVideo.muted = true;
               remoteVideo.play().catch(() => {});
             });
@@ -744,10 +928,6 @@ async function setupPeerConnection(isInitiator) {
         remoteVideo.onloadedmetadata = triggerPlayback;
         remoteVideo.onloadeddata = triggerPlayback;
         remoteVideo.oncanplay = triggerPlayback;
-        remoteVideo.onplaying = () => {
-          if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-          if (strangerBadge) strangerBadge.style.display = 'block';
-        };
       }
 
       if (remoteAudio) {
@@ -757,18 +937,6 @@ async function setupPeerConnection(isInitiator) {
         remoteAudio.playsInline = true;
         remoteAudio.play().catch(e => console.warn('remoteAudio play:', e));
       }
-
-      event.track.onunmute = () => {
-        console.log(`📡 Track unmuted: ${event.track.kind}`);
-        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-        if (strangerBadge) strangerBadge.style.display = 'block';
-        if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
-        if (remoteVideo) remoteVideo.style.display = 'block';
-      };
-
-      if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-      if (strangerBadge) strangerBadge.style.display = 'block';
-      if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
     };
 
     peerConnection.onconnectionstatechange = () => {
@@ -779,17 +947,7 @@ async function setupPeerConnection(isInitiator) {
         if (strangerBadge) strangerBadge.style.display = 'block';
         if (matchStatusText) matchStatusText.textContent = 'Live Connected!';
       } else if (peerConnection.connectionState === 'failed') {
-        console.warn('WebRTC connection failed, attempting ICE restart...');
         try { peerConnection.restartIce(); } catch (e) {}
-      }
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log('❄️ ICE Connection State:', peerConnection.iceConnectionState);
-      if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-        if (strangerPlaceholder) strangerPlaceholder.style.display = 'none';
-        if (remoteVideo) remoteVideo.style.display = 'block';
-        if (strangerBadge) strangerBadge.style.display = 'block';
       }
     };
 
@@ -821,7 +979,7 @@ async function setupPeerConnection(isInitiator) {
       });
       await peerConnection.setLocalDescription(offer);
       sendSignal('offer', { session_id: sessionId, sdp: { type: offer.type, sdp: offer.sdp } });
-      console.log('⚡ Sent WebRTC Offer with Audio & Video');
+      console.log('⚡ Sent WebRTC Offer');
     } catch (e) {
       console.error('Error creating offer:', e);
     }
@@ -856,10 +1014,10 @@ function unlockAudio() {
   }
 }
 
-// 6. Matchmaking Action (Single Button: Start Match -> Next Match)
+// 5. Matchmaking Action
 async function handleMatchButtonClick() {
   if (!currentUser) {
-    showToast('⚠️ Please login or create an account to start video matching!');
+    showToast('⚠️ Please sign in with Google or continue as guest first!');
     openAuthModal();
     return;
   }
@@ -869,14 +1027,12 @@ async function handleMatchButtonClick() {
   clearTimeout(autoNextTimer);
 
   if (!isAutoMatching) {
-    // First time start: activate continuous auto-match loop
     isAutoMatching = true;
     isMatching = true;
     isConnected = false;
     updateMatchUIState('searching');
     sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
   } else {
-    // Already in match loop: user clicked "Next Match" to skip instantly
     if (peerConnection) {
       try { peerConnection.close(); } catch (e) {}
       peerConnection = null;
@@ -892,29 +1048,47 @@ async function handleMatchButtonClick() {
   }
 }
 
-// Event Listeners for Match Control
-btnStartMatch.addEventListener('click', handleMatchButtonClick);
-btnFreeMatch.addEventListener('click', handleMatchButtonClick);
-btnNewChat.addEventListener('click', handleMatchButtonClick);
+function handleStrangerDisconnected() {
+  if (peerConnection) {
+    try { peerConnection.close(); } catch (e) {}
+    peerConnection = null;
+  }
+  remoteStream = null;
+  pendingCandidates = [];
+  isConnected = false;
 
-btnStore.addEventListener('click', () => {
-  showToast('Store is coming soon.');
-});
-
-profileAvatar.addEventListener('click', openAuthModal);
-if (btnCloseAuthModal) {
-  btnCloseAuthModal.addEventListener('click', closeAuthModal);
+  if (isAutoMatching) {
+    isMatching = true;
+    updateMatchUIState('searching');
+    matchStatusText.textContent = 'Stranger disconnected. Finding next stranger...';
+    showToast('Stranger left. Finding next...');
+    addMessage('Stranger has disconnected. Finding next stranger...', 'system');
+    sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
+  } else {
+    updateMatchUIState('idle');
+    matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';
+    addMessage('Stranger has disconnected.', 'system');
+  }
 }
-if (btnToggleAuthMode) {
-  btnToggleAuthMode.addEventListener('click', () => {
-    setAuthMode(authMode === 'login' ? 'signup' : 'login');
+
+// =========================================================
+// 6. EVENT LISTENERS & INITIALIZATION
+// =========================================================
+if (btnStartMatch) btnStartMatch.addEventListener('click', handleMatchButtonClick);
+if (btnFreeMatch) btnFreeMatch.addEventListener('click', handleMatchButtonClick);
+if (btnNewChat) btnNewChat.addEventListener('click', handleMatchButtonClick);
+
+if (btnStore) {
+  btnStore.addEventListener('click', () => {
+    showToast('Store is coming soon.');
   });
 }
-btnLogout.addEventListener('click', handleLogout);
-authForm.addEventListener('submit', handleAuthSubmit);
-authTabs.forEach(tab => {
-  tab.addEventListener('click', () => setAuthMode(tab.dataset.authTab));
-});
+
+if (profileAvatar) profileAvatar.addEventListener('click', openAuthModal);
+if (btnCloseAuthModal) btnCloseAuthModal.addEventListener('click', closeAuthModal);
+if (btnLogout) btnLogout.addEventListener('click', handleLogout);
+if (authForm) authForm.addEventListener('submit', handleAuthSubmit);
+if (btnGuestLogin) btnGuestLogin.addEventListener('click', handleGuestLogin);
 
 document.querySelectorAll('.nav-link').forEach(link => {
   link.addEventListener('click', (event) => {
@@ -956,41 +1130,13 @@ if (btnToggleCam) {
   });
 }
 
-// Unlock audio and video playback on user touch/click gesture
 ['click', 'touchstart', 'touchend', 'pointerdown'].forEach(evt => {
   document.addEventListener(evt, () => {
     unlockAudio();
   }, { passive: true });
 });
 
-// Automatic reconnection when stranger leaves
-function handleStrangerDisconnected() {
-  if (peerConnection) {
-    try { peerConnection.close(); } catch (e) {}
-    peerConnection = null;
-  }
-  remoteStream = null;
-  pendingCandidates = [];
-  isConnected = false;
-
-  if (isAutoMatching) {
-    // Session stays active! Instantly search for the next stranger automatically with 0ms delay
-    isMatching = true;
-    updateMatchUIState('searching');
-    matchStatusText.textContent = 'Stranger disconnected. Finding next stranger...';
-    showToast('Stranger left. Finding next...');
-    addMessage('Stranger has disconnected. Finding next stranger...', 'system');
-
-    // Instant re-queue
-    sendSignal('join_queue', { chat_type: 'video', gender: genderMode });
-  } else {
-    updateMatchUIState('idle');
-    matchStatusText.textContent = 'Stranger disconnected. Click "Start Match" to find another!';
-    addMessage('Stranger has disconnected.', 'system');
-  }
-}
-
-// Keyboard shortcuts (Space / Right Arrow for Start / Next)
+// Keyboard shortcuts (Space / Right Arrow)
 window.addEventListener('keydown', (e) => {
   const isInputFocused = document.activeElement && (
     document.activeElement.tagName === 'INPUT' || 
@@ -1006,19 +1152,21 @@ window.addEventListener('keydown', (e) => {
 const btnGender = document.getElementById('btnGender');
 let genderMode = 'any';
 
-btnGender.addEventListener('click', () => {
-  const modes = [
-    { label: 'Male & Female', value: 'any' },
-    { label: 'Women Only', value: 'female' },
-    { label: 'Men Only', value: 'male' }
-  ];
-  const index = modes.findIndex(mode => mode.value === genderMode);
-  genderMode = modes[(index + 1) % modes.length].value;
-  btnGender.innerHTML = `<i class="fa-solid fa-venus-mars"></i> <span>${modes[(index + 1) % modes.length].label}</span>`;
-  showToast('Gender filter set to ' + modes[(index + 1) % modes.length].label + '.');
-});
+if (btnGender) {
+  btnGender.addEventListener('click', () => {
+    const modes = [
+      { label: 'Male & Female', value: 'any' },
+      { label: 'Women Only', value: 'female' },
+      { label: 'Men Only', value: 'male' }
+    ];
+    const index = modes.findIndex(mode => mode.value === genderMode);
+    genderMode = modes[(index + 1) % modes.length].value;
+    btnGender.innerHTML = `<i class="fa-solid fa-venus-mars"></i> <span>${modes[(index + 1) % modes.length].label}</span>`;
+    showToast('Gender filter set to ' + modes[(index + 1) % modes.length].label + '.');
+  });
+}
 
-// 8. Text Chat
+// 7. Text Chat
 function addMessage(text, sender) {
   const msgDiv = document.createElement('div');
   msgDiv.className = `message msg-${sender}`;
@@ -1036,40 +1184,45 @@ function handleSendMessage() {
   sendSignal('typing', { session_id: sessionId, is_typing: false });
 }
 
-btnSendMessage.addEventListener('click', handleSendMessage);
-messageInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    handleSendMessage();
-  }
-});
+if (btnSendMessage) btnSendMessage.addEventListener('click', handleSendMessage);
+if (messageInput) {
+  messageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      handleSendMessage();
+    }
+  });
 
-messageInput.addEventListener('input', () => {
-  if (sessionId) {
-    sendSignal('typing', { session_id: sessionId, is_typing: messageInput.value.length > 0 });
-  }
-});
+  messageInput.addEventListener('input', () => {
+    if (sessionId) {
+      sendSignal('typing', { session_id: sessionId, is_typing: messageInput.value.length > 0 });
+    }
+  });
+}
 
-// 9. Modals
-btnPreferences.addEventListener('click', () => {
-  prefModal.style.display = 'flex';
-});
+if (btnPreferences) {
+  btnPreferences.addEventListener('click', () => {
+    prefModal.style.display = 'flex';
+  });
+}
 
-btnCloseModal.addEventListener('click', () => {
-  prefModal.style.display = 'none';
-});
+if (btnCloseModal) {
+  btnCloseModal.addEventListener('click', () => {
+    prefModal.style.display = 'none';
+  });
+}
 
-authModal.addEventListener('click', (event) => {
-  if (event.target === authModal) {
-    closeAuthModal();
-  }
-});
+if (authModal) {
+  authModal.addEventListener('click', (event) => {
+    if (event.target === authModal && currentUser) {
+      closeAuthModal();
+    }
+  });
+}
 
-// Init on Load
+// Run on Page Load
 window.addEventListener('DOMContentLoaded', () => {
   checkSecureContext();
   connectWebSocket();
   loadCurrentUser();
   updateMatchUIState('idle');
 });
-
-
